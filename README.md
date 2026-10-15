@@ -2,6 +2,16 @@
 
 Rust-native desktop implementation of [pyDatView](https://github.com/ebranlard/pyDatView): open tabulated scientific data, select channels, plot and compare signals, transform tables, and export results. The desktop application uses egui rather than wxPython; Python is not required to run it.
 
+## Binary downloads
+
+Download the archive for your machine from [GitHub Releases](https://github.com/exror/rustDatView/releases). Rust and Python are not needed to run these builds.
+
+- **Windows x64:** extract the ZIP and double-click `datview.exe`. The runtime is statically linked; no MinGW installation is needed. This is an unsigned application, so Windows may show a SmartScreen warning.
+- **macOS Apple Silicon / Intel:** choose the matching architecture, extract the ZIP, and move `rustDatView.app` to Applications. Requires macOS 12 or newer. The application is ad-hoc signed, **not Apple Developer signed or notarized**; Gatekeeper may block its first launch. After verifying the download, use the explicit **Open Anyway** option in System Settings → Privacy & Security if you trust it.
+- Compare the archive's SHA-256 against `SHA256SUMS.txt` before opening it. Archives include license notices and synthetic example data, not local settings or installed fonts.
+
+Release binaries are built by `.github/workflows/release.yml` on native Windows and macOS runners. The workflow runs for `release/**` branches and archives only explicit distribution files. Packaging runs the actual bundled executable and checks PNG/SVG exports; macOS runtime dependencies must be system libraries. Publishing is separate so archives can be audited before upload.
+
 ## Build and run
 
 Install stable Rust with [rustup](https://rustup.rs/), then:
