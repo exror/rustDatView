@@ -480,6 +480,7 @@ impl DatView {
         ui.heading("Make DatView yours");
         ui.weak("A comfortable workspace and clear, share-ready figures.");
         ui.add_space(6.0);
+        self.startup_settings(ui, ctx);
         let mut changed = false;
         let mut theme_changed = false;
         ui.group(|ui| {
@@ -612,15 +613,9 @@ impl DatView {
         }
         self.dirty |= changed;
         ui.add_space(6.0);
-        ui.weak("Options and pipeline are saved on exit. Input filenames and data are not persisted.");
+        ui.weak("Settings are autosaved as a recoverable draft, not silently restored. Pipelines are saved separately.");
         if ui.button("Reset options to defaults").clicked() {
-            self.options = Options::default();
-            self.plot_type = PlotType::Regular;
-            appearance::apply_theme(ctx, self.options.dark, self.options.font_size);
-            if let Err(error) = self.appearance.apply_font(ctx, &self.options.style.font_family) {
-                self.error(error);
-            }
-            self.dirty = true;
+            self.apply_settings(Options::default(), ctx);
         }
     }
 }

@@ -33,7 +33,7 @@ The repository does not bundle compilers, private build configuration, input fil
 - Statistics include original/transformed signal summaries and integrals. Two-click measurements expose interval statistics. Tools provide model fitting, logarithmic-decrement damping estimates and rainflow equivalent loads.
 - **2D fields** exposes available scalar fields, coordinate axes, colormaps, automatic/common/manual color ranges, polar projection and CSV matrix export.
 - Export figures as SVG, PNG, PDF or EPS. Export Python plotting scripts with transform/pipeline configuration. Generated scripts require Python and the selected scientific library flavor; exporting a script does not execute it.
-- Preferences and pipeline options persist through egui's application storage. Loaded filenames and table data are not persisted.
+- Startup uses factory defaults unless you explicitly select a default settings preset. Restoring previous settings is opt-in under **File → Options → Startup & presets**. Loaded filenames and table data are not persisted.
 
 ## Interactive telemetry figures
 
@@ -46,7 +46,16 @@ The repository does not bundle compilers, private build configuration, input fil
 5. Under **Share**, set title, axis labels, resolution, grid, legend and subplots. **Fonts & appearance** offers searchable installed font families, live interface preview, light/dark themes, and separate interface/export font sizes. Fonts are loaded from your system, not bundled into this repository. Restart after installing a new font.
 6. **Save annotated image** produces a clean figure without UI controls. **Copy image to clipboard** pastes the same figure into chat or an image editor. PNG is convenient for messages; SVG/PDF retain vector geometry and resolve font glyphs so recipients need not install your chosen font. EPS embeds a raster image to preserve typography and highlights.
 
-Display filters are non-destructive and use the current plot mode's X/Y values before logarithmic/flipped display axes. Source tables, statistics and analysis tools are unchanged; use a pipeline mask when the filtered values should also affect analysis. Annotations and display rules are scoped to the plot mode and **session-only**: export your figure before closing or replacing the loaded files. Python script export reproduces the analysis pipeline, not these manual presentation edits. Appearance and figure settings persist.
+Display filters are non-destructive and use the current plot mode's X/Y values before logarithmic/flipped display axes. Source tables, statistics and analysis tools are unchanged; use a pipeline mask when the filtered values should also affect analysis. Annotations and display rules are scoped to the plot mode and **session-only**: export your figure before closing or replacing the loaded files. Python script export reproduces the analysis pipeline, not these manual presentation edits.
+
+## Startup, settings presets and drafts
+
+- **Fresh by default:** each launch uses factory settings, or a named preset explicitly chosen in the **Default preset** dropdown. Interactive zoom/pan and panel caches are not restored.
+- **Named presets:** save the current appearance, plot transform/options, axis limits, figure styling, field styling and display preferences. Apply a saved preset to the current view, explicitly update it, or delete it. Ordinary edits never modify a named preset, including the startup default. Deleting the default preset returns startup to factory defaults.
+- **Optional restoration:** enable **Restore previous settings on startup** to use the last autosaved settings instead. These take precedence over the default preset; if no previous settings exist, the default preset is used.
+- **Recoverable draft:** current settings are autosaved periodically and on normal exit. Unsaved custom settings are retained as a draft rather than silently applied. On a later launch, the recovery window can save them as a named preset, discard them, or defer the decision. Saving a recovered preset does not change the current view; making it a future default requires an explicit checkbox. A draft survives a fresh/default-only session until saved, replaced by a newer custom draft, or discarded.
+- **Existing installations:** previously implicit saved settings are offered as a recoverable draft, not automatically loaded or converted into a default preset.
+- **Scope:** presets and optional restoration contain settings, not loaded files/data, channel selections, annotations, display-filter rules or processing pipelines. Saving/applying/resetting settings does not change the currently loaded data or pipeline. Save processing actions using **Pipeline → Save pipeline** and explicitly load that JSON later (or use `--pipeline PATH`).
 
 
 ## Command line
