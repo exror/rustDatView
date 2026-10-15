@@ -23,7 +23,11 @@ impl DatView {
             .resizable(true)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
-                    .max_height(650.0)
+                    .max_height(if self.editor == Editor::Settings {
+                        (ctx.screen_rect().height() - 160.0).max(100.0)
+                    } else {
+                        650.0
+                    })
                     .show(ui, |ui| match self.editor {
                         Editor::Formula => self.formula_editor(ui),
                         Editor::RenameTable | Editor::RenameColumn => self.rename_editor(ui),
@@ -473,38 +477,149 @@ impl DatView {
         );
     }
     fn settings_editor(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        if ui.checkbox(&mut self.options.dark, "Dark theme").changed() {
-            ctx.set_visuals(if self.options.dark {
-                egui::Visuals::dark()
-            } else {
-                egui::Visuals::light()
+        ui.heading("Make DatView yours");
+        ui.weak("A comfortable workspace and clear, share-ready figures.");
+        ui.add_space(6.0);
+        let mut changed = false;
+        let mut theme_changed = false;
+        ui.group(|ui| {
+            ui.strong("Appearance");
+            ui.horizontal(|ui| {
+                ui.label("Theme");
+                theme_changed |= ui.selectable_value(&mut self.options.dark, false, "Light").changed();
+                theme_changed |= ui.selectable_value(&mut self.options.dark, true, "Dark").changed();
             });
-        }
-        ui.horizontal(|ui| {
-            ui.label("Font size");
-            if ui
-                .add(egui::DragValue::new(&mut self.options.font_size).range(8.0..=32.0))
-                .changed()
-            {
-                ctx.style_mut(|style| {
-                    for font in style.text_styles.values_mut() {
-                        font.size = self.options.font_size;
-                    }
+            ui.horizontal(|ui| {
+                ui.label("Font");
+                match self.appearance.font_picker(ui, ctx, &mut self.options.style.font_family) {
+                    Ok(font_changed) => changed |= font_changed,
+                    Err(error) => self.error(error),
+                }
+            });
+            ui.weak("Installed families are shared by the interface and exported figures.");
+            ui.horizontal(|ui| {
+                ui.label("Interface size");
+                theme_changed |= ui.add(
+                    egui::Slider::new(&mut self.options.font_size, 8.0..=32.0)
+                        .suffix(" pt")
+                ).changed();
+            });
+            ui.label(egui::RichText::new("CPU package · 72.5 °C   |   Core clock · 5,200 MHz")
+                .size(self.options.font_size));
+        });
+        ui.add_space(6.0);
+        ui.group(|ui| {
+            ui.strong("Share-ready figure");
+            ui.weak("These settings control the exported image, not the desktop window.");
+            egui::Grid::new("figure-label-settings")
+                .num_columns(2)
+                .spacing([16.0, 9.0])
+                .show(ui, |ui| {
+                    ui.label("Title");
+                    changed |= ui.add(egui::TextEdit::singleline(&mut self.options.style.title)
+                        .hint_text("e.g. CPU temperature under sustained load")
+                        .desired_width(360.0)).changed();
+                    ui.end_row();
+                    ui.label("X-axis label");
+                    changed |= ui.add(egui::TextEdit::singleline(&mut self.options.style.x_label)
+                        .hint_text("Automatic from plotted channels")
+                        .desired_width(360.0)).changed();
+                    ui.end_row();
+                    ui.label("Y-axis label");
+                    changed |= ui.add(egui::TextEdit::singleline(&mut self.options.style.y_label)
+                        .hint_text("Automatic from plotted channels")
+                        .desired_width(360.0)).changed();
+                    ui.end_row();
+                    ui.label("Figure text size");
+                    changed |= ui.add(egui::Slider::new(&mut self.options.style.font_size, 8.0..=48.0)
+                        .suffix(" pt")).changed();
+                    ui.end_row();
+                    ui.label("Resolution");
+                    let dimensions = (self.options.style.figure_width, self.options.style.figure_height);
+                    let label = match dimensions {
+                        (1200, 800) => "1200 × 800 · Standard",
+                        (1920, 1080) => "1920 × 1080 · Full HD",
+                        (2560, 1440) => "2560 × 1440 · QHD",
+                        (3200, 1800) => "3200 × 1800 · High resolution",
+                        _ => "Custom",
+                    };
+                    egui::ComboBox::from_id_salt("share-resolution")
+                        .selected_text(label)
+                        .show_ui(ui, |ui| {
+                            for (width, height, name) in [
+                                (1200, 800, "1200 × 800 · Standard"),
+                                (1920, 1080, "1920 × 1080 · Full HD"),
+                                (2560, 1440, "2560 × 1440 · QHD"),
+                                (3200, 1800, "3200 × 1800 · High resolution"),
+                            ] {
+                                if ui.selectable_label(dimensions == (width, height), name).clicked() {
+                                    self.options.style.figure_width = width;
+                                    self.options.style.figure_height = height;
+                                    changed = true;
+                                }
+                            }
+                        });
+                    ui.end_row();
+                    ui.label("Custom dimensions");
+                    ui.horizontal(|ui| {
+                        changed |= ui.add(egui::DragValue::new(&mut self.options.style.figure_width)
+                            .range(200..=16384).suffix(" px")).changed();
+                        ui.label("×");
+                        changed |= ui.add(egui::DragValue::new(&mut self.options.style.figure_height)
+                            .range(150..=16384).suffix(" px")).changed();
+                    });
+                    ui.end_row();
                 });
+        });
+        ui.add_space(6.0);
+        ui.group(|ui| {
+            ui.strong("Plot styling");
+            ui.horizontal_wrapped(|ui| {
+                changed |= ui.checkbox(&mut self.options.style.grid, "Grid").changed();
+                changed |= ui.checkbox(&mut self.options.style.legend, "Legend").changed();
+                changed |= ui.checkbox(&mut self.options.style.lines, "Lines").changed();
+                changed |= ui.checkbox(&mut self.options.style.markers, "Markers").changed();
+                changed |= ui.checkbox(&mut self.options.style.step, "Step lines").changed();
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Line width");
+                changed |= ui.add(egui::DragValue::new(&mut self.options.style.width)
+                    .range(0.1..=20.0).speed(0.1).suffix(" px")).changed();
+                ui.label("Marker size");
+                changed |= ui.add(egui::DragValue::new(&mut self.options.style.marker_size)
+                    .range(0.5..=30.0).speed(0.1).suffix(" px")).changed();
+            });
+        });
+        ui.collapsing("Advanced styling", |ui| {
+            ui.weak("All plot/export style fields. Axis limits use raw data coordinates.");
+            let mut style = serde_json::to_value(&self.options.style).unwrap_or(Value::Null);
+            if json_edit(ui, &mut style) {
+                match serde_json::from_value::<Style>(style) {
+                    Ok(mut style) => {
+                        if let Err(error) = self.appearance.apply_font(ctx, &style.font_family) {
+                            style.font_family.clone_from(&self.options.style.font_family);
+                            self.error(error);
+                        }
+                        self.options.style = style;
+                        changed = true;
+                    }
+                    Err(error) => self.error(error),
+                }
             }
         });
-        ui.label("Plot/export styling (limits are raw data coordinates):");
-        let mut style = serde_json::to_value(&self.options.style).unwrap_or(Value::Null);
-        if json_edit(ui, &mut style) {
-            match serde_json::from_value(style) {
-                Ok(s) => self.options.style = s,
-                Err(e) => self.error(e),
-            }
+        if theme_changed {
+            appearance::apply_theme(ctx, self.options.dark, self.options.font_size);
         }
-        ui.label("Options and pipeline are saved automatically on exit. Input filenames and data are not persisted.");
-        if ui.button("Reset options").clicked() {
+        self.dirty |= changed;
+        ui.add_space(6.0);
+        ui.weak("Options and pipeline are saved on exit. Input filenames and data are not persisted.");
+        if ui.button("Reset options to defaults").clicked() {
             self.options = Options::default();
             self.plot_type = PlotType::Regular;
+            appearance::apply_theme(ctx, self.options.dark, self.options.font_size);
+            if let Err(error) = self.appearance.apply_font(ctx, &self.options.style.font_family) {
+                self.error(error);
+            }
             self.dirty = true;
         }
     }

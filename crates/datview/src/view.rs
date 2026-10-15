@@ -17,9 +17,12 @@ impl DatView {
                     serde_json::to_value(&self.plot_type).unwrap_or_default();
                 self.overlays.clear();
                 self.dirty = true;
+                self.presentation.pending=None;
+                self.presentation.tool=presentation::Tool::Inspect;
             }
             ui.separator();
             let s = &mut self.options.style;
+            ui.menu_button("Axes & lines",|ui|{
             for (value, label) in [
                 (&mut s.log_x, "Log X"),
                 (&mut s.log_y, "Log Y"),
@@ -35,6 +38,8 @@ impl DatView {
             ] {
                 ui.checkbox(value, label);
             }
+            });
+            if ui.selectable_label(self.presentation.open,"Plot studio").clicked(){self.presentation.open=!self.presentation.open;}
         });
         if self.options.mode == "Compare" {
             ui.horizontal(|ui| {
@@ -85,6 +90,9 @@ impl DatView {
             if ui.button("Auto").clicked(){self.options.style.limits=None;self.limits_text.clear();}
             if ui.button("Style…").clicked(){self.editor=Editor::Settings;}
             if ui.button("Save figure…").clicked(){self.figure_export();}
+            if self.presentation.tool!=presentation::Tool::Inspect {
+                ui.colored_label(Color32::from_rgb(35,112,191),match self.presentation.tool{presentation::Tool::Point=>"Click a sample to annotate",_=>if self.presentation.pending.is_some(){"Click region end · Esc cancels"}else{"Click region start · Esc cancels"}});
+            }
         });
     }
     pub(super) fn draw_plot(&mut self, ui: &mut egui::Ui) {
@@ -246,7 +254,9 @@ impl DatView {
                             click = plot_ui.pointer_coordinate();
                         }
                     });
-                    if measure_enabled && response.response.clicked() {
+                    self.presentation.paint(ui,&response.transform,curves,s,&self.options.mode);
+                    self.presentation.click(&response,curves,s,&self.options.mode);
+                    if measure_enabled && self.presentation.tool==presentation::Tool::Inspect && response.response.clicked() {
                         if let Some(p) = click {
                             let x = if logx {
                                 10f64.powf(if flipx { -p.x } else { p.x })
@@ -300,6 +310,7 @@ impl DatView {
                 egui::CollapsingHeader::new("Statistics")
                     .default_open(true)
                     .show(ui, |ui| {
+                        if self.presentation.rules.iter().any(|r|r.enabled&&r.mode==self.options.mode){ui.weak("Source statistics — before non-destructive display filters.");}
                         ui.menu_button("Displayed statistics", |ui| {
                             for &name in INFO_COLUMNS {
                                 let mut selected =
@@ -476,7 +487,7 @@ fn axis_label(value: f64, log: bool, flip: bool, data: Option<&dv_core::ColumnDa
                 .unwrap_or(&"")
                 .to_string()
         }
-        _ => format!("{value:.5}"),
+        _ => export::value_label(value),
     }
 }
 pub(crate) fn mode_type(mode: &str) -> PlotType {

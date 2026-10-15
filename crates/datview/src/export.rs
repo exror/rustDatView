@@ -1,4 +1,5 @@
 //! Vector figure construction shared by SVG, PNG, PDF and EPS exports.
+use crate::app::presentation::Annotation;
 use serde::{Deserialize, Serialize};
 use std::{fmt::Write as _, path::Path};
 
@@ -32,6 +33,8 @@ pub struct Style {
     pub limits: Option<[f64; 4]>,
     pub figure_width: u32,
     pub figure_height: u32,
+    pub font_family: String,
+    pub font_size: f32,
 }
 impl Default for Style {
     fn default() -> Self {
@@ -47,7 +50,7 @@ impl Default for Style {
             lines: true,
             markers: false,
             step: false,
-            width: 1.5,
+            width: 2.0,
             marker_size: 3.0,
             title: String::new(),
             x_label: String::new(),
@@ -55,6 +58,8 @@ impl Default for Style {
             limits: None,
             figure_width: 1200,
             figure_height: 800,
+            font_family: String::new(),
+            font_size: 14.0,
         }
     }
 }
@@ -147,14 +152,17 @@ enum Element {
     Path(Vec<[f64; 2]>, [u8; 3], f32),
     Text(f64, f64, String, f32),
     Circle(f64, f64, f32, [u8; 3]),
+    Rect(f64, f64, f64, f64, [u8; 3], f32),
 }
 struct Figure {
     width: u32,
     height: u32,
     elements: Vec<Element>,
+    font_family: String,
+    font_size: f32,
 }
 impl Figure {
-    fn build(curves: &[Curve], s: &Style) -> Result<Self, String> {
+    fn build(curves: &[Curve], s: &Style, annotations: &[&Annotation]) -> Result<Self, String> {
         if curves.is_empty() {
             return Err("No plotted curves to export".into());
         }
@@ -165,6 +173,12 @@ impl Figure {
             width: s.figure_width,
             height: s.figure_height,
             elements: Vec::new(),
+            font_family: if s.font_family.is_empty() {
+                "sans-serif".into()
+            } else {
+                s.font_family.clone()
+            },
+            font_size: s.font_size,
         };
         let count = if s.subplots { curves.len() } else { 1 };
         let h = s.figure_height as f64 / count as f64;
@@ -203,6 +217,34 @@ impl Figure {
                 }
                 [left + x * (right - left), bottom - y * (bottom - top)]
             };
+            for annotation in annotations {
+                if let Annotation::Region {
+                    x_axis,
+                    min,
+                    max,
+                    color,
+                    ..
+                } = annotation
+                {
+                    if *x_axis != subset[0].sx || !min.is_finite() || !max.is_finite() {
+                        continue;
+                    }
+                    let a = axis(min.min(*max), s.log_x).max(b[0]);
+                    let z = axis(min.max(*max), s.log_x).min(b[1]);
+                    if a.is_finite() && z.is_finite() && a < z {
+                        let a = map([a, b[2]])[0];
+                        let z = map([z, b[2]])[0];
+                        fig.elements.push(Element::Rect(
+                            a.min(z),
+                            top,
+                            (z - a).abs(),
+                            bottom - top,
+                            *color,
+                            0.15,
+                        ));
+                    }
+                }
+            }
             for tick in 0..=5 {
                 let r = tick as f64 / 5.0;
                 let x = b[0] + r * (b[1] - b[0]);
@@ -224,13 +266,13 @@ impl Figure {
                 fig.elements.push(Element::Text(
                     xp - 20.0,
                     bottom + 20.0,
-                    format!("{:.4}", if s.log_x { 10f64.powf(x) } else { x }),
+                    value_label(if s.log_x { 10f64.powf(x) } else { x }),
                     11.0,
                 ));
                 fig.elements.push(Element::Text(
                     4.0,
                     yp + 4.0,
-                    format!("{:.4}", if s.log_y { 10f64.powf(y) } else { y }),
+                    value_label(if s.log_y { 10f64.powf(y) } else { y }),
                     11.0,
                 ));
             }
@@ -335,6 +377,61 @@ impl Figure {
                         .push(Element::Text(right - 200.0, yy + 4.0, c.name.clone(), 11.0));
                 }
             }
+            for annotation in annotations {
+                match annotation {
+                    Annotation::Point {
+                        curve,
+                        x,
+                        y,
+                        label,
+                        color,
+                        ..
+                    } if subset.iter().any(|c| &c.name == curve) => {
+                        let p = map([axis(*x, s.log_x), axis(*y, s.log_y)]);
+                        if p.iter().all(|v| v.is_finite())
+                            && p[0] >= left
+                            && p[0] <= right
+                            && p[1] >= top
+                            && p[1] <= bottom
+                        {
+                            fig.elements.push(Element::Circle(p[0], p[1], 5., *color));
+                            let tx = (p[0] + 12.).min(
+                                (right - label.chars().count() as f64 * s.font_size as f64 * 0.48)
+                                    .max(left + 8.),
+                            );
+                            let ty = (p[1] - 14.).max(top + 16.);
+                            fig.elements
+                                .push(Element::Path(vec![p, [tx, ty + 3.]], *color, 1.));
+                            fig.elements.push(Element::Rect(
+                                tx - 4.,
+                                ty - s.font_size as f64,
+                                ((label.chars().count() as f64 * s.font_size as f64 * 0.55) + 8.)
+                                    .min(right - tx + 4.),
+                                s.font_size as f64 + 6.,
+                                [255, 255, 255],
+                                0.94,
+                            ));
+                            fig.elements.push(Element::Text(tx, ty, label.clone(), 13.));
+                        }
+                    }
+                    Annotation::Region {
+                        x_axis,
+                        min,
+                        max,
+                        label,
+                        ..
+                    } if *x_axis == subset[0].sx => {
+                        let a = axis(min.min(*max), s.log_x).max(b[0]);
+                        let z = axis(min.max(*max), s.log_x).min(b[1]);
+                        if a.is_finite() && z.is_finite() && a < z {
+                            let x = map([a, b[2]])[0].min(map([z, b[2]])[0]);
+                            fig.elements
+                                .push(Element::Text(x + 7., top + 18., label.clone(), 12.));
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
         Ok(fig)
     }
@@ -350,7 +447,8 @@ impl Figure {
                     let _=write!(out,"<path d=\"{d}\" fill=\"none\" stroke=\"rgb({},{},{})\" stroke-width=\"{w}\"/>",c[0],c[1],c[2]);
                 }
                 Element::Text(x, y, t, size) => {
-                    let _=write!(out,"<text x=\"{x}\" y=\"{y}\" font-family=\"sans-serif\" font-size=\"{size}\">{}</text>",xml(t));
+                    let size = size * self.font_size / 14.;
+                    let _=write!(out,"<text x=\"{x}\" y=\"{y}\" font-family=\"{}\" font-size=\"{size}\">{}</text>",xml(&self.font_family),xml(t));
                 }
                 Element::Circle(x, y, r, c) => {
                     let _ = write!(
@@ -359,53 +457,12 @@ impl Figure {
                         c[0], c[1], c[2]
                     );
                 }
+                Element::Rect(x, y, w, h, color, alpha) => {
+                    let _=write!(out,"<rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" fill=\"rgb({},{},{})\" fill-opacity=\"{alpha}\"/>",color[0],color[1],color[2]);
+                }
             }
         }
         out.push_str("</svg>");
-        out
-    }
-    fn eps(&self) -> String {
-        let mut out=format!("%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 {} {}\n%%LanguageLevel: 2\n1 1 1 setrgbcolor 0 0 {} {} rectfill\n",self.width,self.height,self.width,self.height);
-        for e in &self.elements {
-            match e {
-                Element::Path(p, c, w) => {
-                    let _ = writeln!(
-                        out,
-                        "{} {} {} setrgbcolor {w} setlinewidth newpath",
-                        c[0] as f64 / 255.0,
-                        c[1] as f64 / 255.0,
-                        c[2] as f64 / 255.0
-                    );
-                    for (i, [x, y]) in p.iter().enumerate() {
-                        let _ = writeln!(
-                            out,
-                            "{x} {} {}",
-                            self.height as f64 - y,
-                            if i == 0 { "moveto" } else { "lineto" }
-                        );
-                    }
-                    out.push_str("stroke\n");
-                }
-                Element::Text(x, y, t, size) => {
-                    let text = t
-                        .replace('\\', "\\\\")
-                        .replace('(', "\\(")
-                        .replace(')', "\\)");
-                    let _=writeln!(out,"0 0 0 setrgbcolor /Helvetica findfont {size} scalefont setfont {x} {} moveto ({text}) show",self.height as f64-y);
-                }
-                Element::Circle(x, y, r, c) => {
-                    let _ = writeln!(
-                        out,
-                        "{} {} {} setrgbcolor newpath {x} {} {r} 0 360 arc fill",
-                        c[0] as f64 / 255.0,
-                        c[1] as f64 / 255.0,
-                        c[2] as f64 / 255.0,
-                        self.height as f64 - y
-                    );
-                }
-            }
-        }
-        out.push_str("showpage\n%%EOF\n");
         out
     }
 }
@@ -447,40 +504,173 @@ fn clip(a: [f64; 2], z: [f64; 2], l: f64, r: f64, t: f64, b: f64) -> Option<([f6
     ))
 }
 
-pub fn save(path: &Path, curves: &[Curve], style: &Style) -> Result<(), String> {
-    let figure = Figure::build(curves, style)?;
+pub fn save(
+    path: &Path,
+    curves: &[Curve],
+    style: &Style,
+    annotations: &[&Annotation],
+) -> Result<(), String> {
+    let figure = Figure::build(curves, style, annotations)?;
     let ext = path
         .extension()
         .and_then(|x| x.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
+    let tree = render_tree(&figure)?;
     let bytes = match ext.as_str() {
-        "svg" => figure.svg().into_bytes(),
-        "eps" => figure.eps().into_bytes(),
-        "png" | "pdf" => {
-            let mut options = resvg::usvg::Options::default();
-            options.fontdb_mut().load_system_fonts();
-            let tree =
-                resvg::usvg::Tree::from_str(&figure.svg(), &options).map_err(|e| e.to_string())?;
-            if ext == "pdf" {
-                svg2pdf::to_pdf(
-                    &tree,
-                    svg2pdf::ConversionOptions::default(),
-                    svg2pdf::PageOptions::default(),
-                )
-                .map_err(|e| e.to_string())?
-            } else {
-                let mut pixmap = resvg::tiny_skia::Pixmap::new(figure.width, figure.height)
-                    .ok_or("Figure image allocation failed")?;
-                resvg::render(
-                    &tree,
-                    resvg::tiny_skia::Transform::identity(),
-                    &mut pixmap.as_mut(),
-                );
+        "svg" => tree
+            .to_string(&resvg::usvg::WriteOptions::default())
+            .into_bytes(),
+        "pdf" => svg2pdf::to_pdf(
+            &tree,
+            svg2pdf::ConversionOptions::default(),
+            svg2pdf::PageOptions::default(),
+        )
+        .map_err(|e| e.to_string())?,
+        "png" | "eps" => {
+            let mut pixmap = resvg::tiny_skia::Pixmap::new(figure.width, figure.height)
+                .ok_or("Figure image allocation failed")?;
+            resvg::render(
+                &tree,
+                resvg::tiny_skia::Transform::identity(),
+                &mut pixmap.as_mut(),
+            );
+            if ext == "png" {
                 pixmap.encode_png().map_err(|e| e.to_string())?
+            } else {
+                eps_raster(&pixmap).into_bytes()
             }
         }
         _ => return Err("Choose an SVG, PNG, PDF or EPS filename".into()),
     };
     std::fs::write(path, bytes).map_err(|e| e.to_string())
+}
+
+fn render_tree(figure: &Figure) -> Result<resvg::usvg::Tree, String> {
+    let mut options = resvg::usvg::Options::default();
+    options.fontdb_mut().load_system_fonts();
+    resvg::usvg::Tree::from_str(&figure.svg(), &options).map_err(|e| e.to_string())
+}
+pub fn raster(
+    curves: &[Curve],
+    style: &Style,
+    annotations: &[&Annotation],
+) -> Result<eframe::egui::ColorImage, String> {
+    let figure = Figure::build(curves, style, annotations)?;
+    let tree = render_tree(&figure)?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(figure.width, figure.height)
+        .ok_or("Figure image allocation failed")?;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::identity(),
+        &mut pixmap.as_mut(),
+    );
+    Ok(eframe::egui::ColorImage::from_rgba_premultiplied(
+        [figure.width as usize, figure.height as usize],
+        pixmap.data(),
+    ))
+}
+fn eps_raster(pixmap: &resvg::tiny_skia::Pixmap) -> String {
+    let (w, h) = (pixmap.width(), pixmap.height());
+    let mut out=format!("%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 {w} {h}\n%%LanguageLevel: 2\n%%EndComments\ngsave\n{w} {h} scale\n{w} {h} 8 [{w} 0 0 -{h} 0 {h}]\n{{currentfile {} string readhexstring pop}} false 3 colorimage\n",w*3);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for row in pixmap.data().chunks_exact(w as usize * 4) {
+        for pixel in row.chunks_exact(4) {
+            for &byte in &pixel[..3] {
+                out.push(HEX[(byte >> 4) as usize] as char);
+                out.push(HEX[(byte & 15) as usize] as char);
+            }
+        }
+        out.push('\n');
+    }
+    out.push_str("grestore\nshowpage\n%%EOF\n");
+    out
+}
+
+pub fn value_label(value: f64) -> String {
+    if value != 0. && (value.abs() >= 1e6 || value.abs() < 1e-3) {
+        return format!("{value:.3e}");
+    }
+    let mut text = format!("{value:.4}");
+    while text.ends_with('0') {
+        text.pop();
+    }
+    if text.ends_with('.') {
+        text.pop();
+    }
+    if text == "-0" {
+        text.remove(0);
+    }
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn curve() -> Curve {
+        Curve {
+            name: "SOC".into(),
+            sx: "Time [s]".into(),
+            sy: "Power [W]".into(),
+            points: vec![[0., 1.], [2., 2.], [4., f64::NAN], [6., 3.], [8., 4.]],
+        }
+    }
+    #[test]
+    fn excluded_samples_do_not_bridge_in_shared_images() {
+        let style = Style {
+            grid: false,
+            legend: false,
+            limits: Some([0., 10., 0., 10.]),
+            ..Style::default()
+        };
+        let figure = Figure::build(&[curve()], &style, &[]).unwrap();
+        let paths = figure
+            .elements
+            .iter()
+            .filter_map(|e| match e {
+                Element::Path(points, rgb, _) if *rgb == color(0) => Some(points),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(paths.len(), 2);
+        assert!(paths[0].last().unwrap()[0] < paths[1].first().unwrap()[0]);
+    }
+    #[test]
+    fn highlighted_regions_clip_and_reverse_with_the_x_axis() {
+        let style = Style {
+            grid: false,
+            legend: false,
+            flip_x: true,
+            limits: Some([0., 10., 0., 10.]),
+            ..Style::default()
+        };
+        let region = Annotation::Region {
+            mode: "Regular".into(),
+            x_axis: "Time [s]".into(),
+            min: 4.,
+            max: -2.,
+            label: "Workload".into(),
+            color: [234, 153, 41],
+        };
+        let figure = Figure::build(&[curve()], &style, &[&region]).unwrap();
+        let region = figure
+            .elements
+            .iter()
+            .find_map(|e| match e {
+                Element::Rect(x, y, w, h, _, alpha) if *alpha == 0.15 => Some([*x, *y, *w, *h]),
+                _ => None,
+            })
+            .unwrap();
+        let right = style.figure_width as f64 - 30.;
+        let width = right - 90.;
+        assert_eq!(
+            region,
+            [
+                right - width * 0.4,
+                35.,
+                width * 0.4,
+                style.figure_height as f64 - 100.
+            ]
+        );
+    }
 }

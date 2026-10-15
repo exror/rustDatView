@@ -16,6 +16,12 @@ mod view;
 use selection::{shared_columns, SelectionMode};
 #[path = "fields.rs"]
 mod fields;
+#[path = "channels.rs"]
+mod channels;
+#[path = "appearance.rs"]
+mod appearance;
+#[path = "presentation.rs"]
+pub(crate) mod presentation;
 use crate::export::{self, Curve, Style};
 use serde_json::Value;
 
@@ -95,6 +101,9 @@ pub struct DatView {
     formats: Vec<dv_io::FileFormat>,
     format: Option<String>,
     options: Options,
+    appearance: appearance::Appearance,
+    channel_search: BTreeMap<usize, channels::SearchCache>,
+    presentation: presentation::Presentation,
     pipeline: Pipeline,
     plot_type: PlotType,
     plotted: Vec<PlotData>,
@@ -178,17 +187,18 @@ impl DatView {
                 Err(_) => Pipeline::default(),
             }
         };
-        cc.egui_ctx.set_visuals(if options.dark {
-            egui::Visuals::dark()
-        } else {
-            egui::Visuals::light()
-        });
+        appearance::apply_theme(&cc.egui_ctx, options.dark, options.font_size);
+        let mut appearance = appearance::Appearance::new();
+        if let Err(error)=appearance.apply_font(&cc.egui_ctx,&options.style.font_family){initial_errors.push(error);}
         let mut app = Self {
             tables: TableList::default(),
             selections: BTreeMap::new(),
             formats: dv_io::all_formats(),
             format: launch.format,
             options,
+            appearance,
+            channel_search: BTreeMap::new(),
+            presentation: presentation::Presentation::default(),
             pipeline,
             plot_type,
             plotted: Vec::new(),
@@ -260,18 +270,13 @@ impl DatView {
         self.selected().first().copied()
     }
     fn sync_selection(&mut self) {
+        self.channel_search.clear();
         self.selections.retain(|i, _| *i < self.tables.len());
         for (i, t) in self.tables.tabs.iter().enumerate() {
             let s = self.selections.entry(i).or_insert_with(|| Selection {
                 selected: true,
-                x: if t.ncols() > 1 { 1 } else { 0 },
-                ys: if t.ncols() > 2 {
-                    vec![2]
-                } else if t.ncols() > 1 {
-                    vec![1]
-                } else {
-                    Vec::new()
-                },
+                x: selection::default_x(t),
+                ys: selection::default_ys(t,selection::default_x(t)),
                 filter: String::new(),
             });
             s.x = s.x.min(t.ncols().saturating_sub(1));
@@ -288,6 +293,7 @@ impl DatView {
             self.selections.clear();
             self.overlays.clear();
             self.measurements.clear();
+            self.presentation = presentation::Presentation::default();
         }
         self.tables.dayfirst = self.options.dayfirst;
         let files = paths
@@ -420,15 +426,18 @@ impl DatView {
                 (Err(e), _) | (_, Err(e)) => self.errors.push(e.to_string()),
             }
         }
+        let single_table=self.plotted.first().is_none_or(|first|self.plotted.iter().all(|p|p.it==first.it));
         for p in &self.plotted {
             let x = column_values(&p.x);
             let y = column_values(&p.y);
-            self.curves.push(Curve {
-                name: format!("{} — {}", p.st, p.sy),
+            let mut curve=Curve {
+                name: if single_table{p.sy.clone()}else{format!("{} — {}",p.st,p.sy)},
                 sx: p.sx.clone(),
                 sy: p.sy.clone(),
-                points: x.into_iter().zip(y).map(|(x, y)| [x, y]).collect(),
-            });
+                points: x.into_iter().zip(y).map(|(x,y)|[x,y]).collect(),
+            };
+            self.presentation.filter_curve(&self.options.mode,&mut curve);
+            self.curves.push(curve);
         }
         self.dirty = false;
     }
@@ -464,13 +473,15 @@ impl DatView {
             self.rebuild();
         }
         if let Some(path) = rfd::FileDialog::new()
-            .set_file_name("figure.svg")
-            .add_filter("Figure", &["svg", "png", "pdf", "eps"])
+            .set_file_name("telemetry.png")
+            .add_filter("PNG image", &["png"])
+            .add_filter("Vector figure", &["svg", "pdf", "eps"])
             .save_file()
         {
             let mut curves = self.curves.clone();
             curves.extend(self.overlays.clone());
-            match export::save(&path, &curves, &self.options.style) {
+            let annotations=self.presentation.active(&self.options.mode).collect::<Vec<_>>();
+            match export::save(&path, &curves, &self.options.style,&annotations) {
                 Ok(()) => self.status = "Figure exported".into(),
                 Err(e) => self.error(e),
             }
@@ -577,8 +588,8 @@ impl DatView {
             .resizable(true)
             .default_width(300.0)
             .show(ctx, |ui| {
-                ui.heading("Tables");
-                ui.text_edit_singleline(&mut self.table_filter);
+                ui.heading("Data sources");
+                ui.add(egui::TextEdit::singleline(&mut self.table_filter).hint_text("Find a table…").desired_width(f32::INFINITY));
                 ui.horizontal(|ui| {
                     if ui.button("All").clicked() {
                         for s in self.selections.values_mut() {
@@ -691,7 +702,7 @@ impl DatView {
                     });
                 }
                 ui.separator();
-                ui.heading("Columns");
+                ui.heading("Series");
                 let before = self.options.selection_mode;
                 egui::ComboBox::from_id_salt("selection-mode")
                     .selected_text(match before {
@@ -731,71 +742,7 @@ impl DatView {
                     .id_salt("columns")
                     .show(ui, |ui| {
                         for i in selected {
-                            ui.push_id(i, |ui| {
-                                let names = self.tables.tabs[i].columns();
-                                let s = self.selections.get_mut(&i).unwrap();
-                                egui::CollapsingHeader::new(
-                                    self.tables.tabs[i].active_name.clone(),
-                                )
-                                .default_open(true)
-                                .show(ui, |ui| {
-                                    egui::ComboBox::from_id_salt("x")
-                                        .selected_text(format!(
-                                            "X: {}",
-                                            names.get(s.x).map(String::as_str).unwrap_or("—")
-                                        ))
-                                        .show_ui(ui, |ui| {
-                                            for (j, name) in names.iter().enumerate() {
-                                                if common
-                                                    .as_ref()
-                                                    .is_some_and(|m| !m[0].contains(&j))
-                                                {
-                                                    continue;
-                                                }
-                                                if ui.selectable_value(&mut s.x, j, name).changed()
-                                                {
-                                                    self.dirty = true;
-                                                }
-                                            }
-                                        });
-                                    ui.text_edit_singleline(&mut s.filter);
-                                    ui.horizontal(|ui| {
-                                        if ui.button("All Y").clicked() {
-                                            s.ys = (0..names.len())
-                                                .filter(|j| {
-                                                    *j != s.x
-                                                        && common
-                                                            .as_ref()
-                                                            .is_none_or(|m| m[0].contains(j))
-                                                })
-                                                .collect();
-                                            self.dirty = true;
-                                        }
-                                        if ui.button("Clear Y").clicked() {
-                                            s.ys.clear();
-                                            self.dirty = true;
-                                        }
-                                    });
-                                    for (j, name) in names.iter().enumerate() {
-                                        if common.as_ref().is_some_and(|m| !m[0].contains(&j)) {
-                                            continue;
-                                        }
-                                        if !name.to_lowercase().contains(&s.filter.to_lowercase()) {
-                                            continue;
-                                        }
-                                        let mut yes = s.ys.contains(&j);
-                                        if ui.checkbox(&mut yes, name).changed() {
-                                            if yes {
-                                                s.ys.push(j);
-                                                s.ys.sort_unstable();
-                                            } else {
-                                                s.ys.retain(|k| *k != j);
-                                            }
-                                            self.dirty = true;
-                                        }
-                                    }
-                                });
-                            });
+                            self.channel_picker(ui,i,common.as_ref().map(|m|m[0].as_slice()));
                         }
                     });
             });
@@ -856,8 +803,10 @@ impl eframe::App for DatView {
                 }
             }
         }
+        if ctx.input(|i|i.key_pressed(egui::Key::Escape)){self.presentation.tool=presentation::Tool::Inspect;self.presentation.pending=None;}
         self.menu(ctx);
         self.selection_panel(ctx);
+        self.presentation_panel(ctx);
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(&self.status);
@@ -1080,15 +1029,9 @@ pub fn headless_export(launch: &crate::Launch, path: &std::path::Path) -> Result
     let mut selections = Vec::new();
     let mut plotted = Vec::new();
     for (i, t) in tables.tabs.iter().enumerate() {
-        let x = launch.x.unwrap_or(if t.ncols() > 1 { 1 } else { 0 });
+        let x = launch.x.unwrap_or_else(||selection::default_x(t));
         let ys = if launch.ys.is_empty() {
-            if t.ncols() > 2 {
-                vec![2]
-            } else if t.ncols() > 1 {
-                vec![1]
-            } else {
-                Vec::new()
-            }
+            selection::default_ys(t,x)
         } else {
             launch.ys.clone()
         };
@@ -1139,5 +1082,5 @@ pub fn headless_export(launch: &crate::Launch, path: &std::path::Path) -> Result
                 .collect(),
         })
         .collect::<Vec<_>>();
-    export::save(path, &curves, &Style::default())
+    export::save(path, &curves, &Style::default(),&[])
 }
