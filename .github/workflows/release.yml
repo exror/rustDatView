@@ -1,0 +1,48 @@
+name: Release binaries
+on:
+  push:
+    branches: ['release/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            platform: windows-x86_64
+            target: x86_64-pc-windows-msvc
+            rustflags: '-C target-feature=+crt-static'
+          - os: macos-15
+            platform: macos-aarch64
+            target: aarch64-apple-darwin
+            rustflags: ''
+          - os: macos-15-intel
+            platform: macos-x86_64
+            target: x86_64-apple-darwin
+            rustflags: ''
+    runs-on: ${{ matrix.os }}
+    env:
+      LZMA_API_STATIC: '1'
+      MACOSX_DEPLOYMENT_TARGET: '12.0'
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: cargo build --release -p datview --locked --target ${{ matrix.target }}
+      - name: Package and smoke-test native binary
+        run: python .github/scripts/package_release.py --target ${{ matrix.target }} --platform ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustDatView-${{ matrix.platform }}
+          path: target/release-assets/*.zip
+          if-no-files-found: error
+          retention-days: 14
