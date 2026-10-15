@@ -1,0 +1,12 @@
+[package]
+name = "dv-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Signal processing and analysis tools of datview (port of pydatview/tools)"
+
+[dependencies]
+dv-core.workspace = true
+rustfft = "6"
+nalgebra = "0.33"
+serde.workspace = true

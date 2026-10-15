@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<VTKFile type="ImageData" version="1.0" byte_order="LittleEndian" header_type="UInt32" compressor="vtkLZMADataCompressor">
+  <ImageData WholeExtent="0 2 0 1 0 0" Origin="10 5 0" Spacing="10 4 1">
+    <Piece Extent="0 2 0 1 0 0">
+      <PointData Scalars="Signal"><DataArray type="Float64" Name="Signal" NumberOfComponents="1" format="appended" offset="0"/></PointData>
+      <CellData/>
+    </Piece>
+  </ImageData>
+  <AppendedData encoding="base64">_AQAAADAAAAAwAAAAVAAAAA==/Td6WFoAAATm1rRGAgAhARYAAAB0L+Wj4AAvABZdAABpumDv7Z3xH3GsjxbdSjou1fxFgAAAAAAWscdk2ux8UgABMjD20S/rH7bzfQEAAAAABFla</AppendedData>
+</VTKFile>
