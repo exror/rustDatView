@@ -1,0 +1,12 @@
+[package]
+name = "dv-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core data model of datview (Rust port of pyDatView): DataFrame, Table, TableList, formulas"
+
+[dependencies]
+chrono.workspace = true
+regex.workspace = true
+thiserror.workspace = true
+serde.workspace = true

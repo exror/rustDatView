@@ -1,0 +1,14 @@
+[package]
+name = "dv-plot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Plot data, pipeline and plugins of datview (port of plotdata.py, pipeline.py, plugins/)"
+
+[dependencies]
+dv-core.workspace = true
+dv-tools.workspace = true
+dv-io.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+regex.workspace = true

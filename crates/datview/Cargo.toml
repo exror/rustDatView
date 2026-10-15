@@ -1,0 +1,19 @@
+[package]
+name = "datview"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "datview: GUI to display tabulated data from files (Rust port of pyDatView)"
+
+[dependencies]
+dv-core.workspace = true
+dv-tools.workspace = true
+dv-io.workspace = true
+dv-plot.workspace = true
+eframe = { version = "0.31", features = ["persistence"] }
+egui_plot = "0.32"
+rfd = "0.15"
+serde.workspace = true
+serde_json.workspace = true
+resvg = "0.45"
+svg2pdf = "0.13"
