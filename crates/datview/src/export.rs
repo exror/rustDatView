@@ -11,7 +11,7 @@ pub struct Curve {
     pub points: Vec<[f64; 2]>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Style {
     pub log_x: bool,

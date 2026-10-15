@@ -1,7 +1,7 @@
 use super::*;
 use egui_plot::{Plot, PlotImage, PlotPoint};
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(super) struct FieldStyle {
     pub cmap: String,

@@ -22,6 +22,8 @@ mod channels;
 mod appearance;
 #[path = "presentation.rs"]
 pub(crate) mod presentation;
+#[path = "preferences.rs"]
+mod preferences;
 use crate::export::{self, Curve, Style};
 use serde_json::Value;
 
@@ -32,7 +34,7 @@ struct Selection {
     ys: Vec<usize>,
     filter: String,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 struct Options {
     style: Style,
@@ -43,7 +45,6 @@ struct Options {
     font_size: f32,
     mode: String,
     plot_options: Value,
-    pipeline: Value,
     selection_mode: SelectionMode,
     field_style: fields::FieldStyle,
     info_columns: Vec<String>,
@@ -71,7 +72,6 @@ impl Default for Options {
                 "TI".into(),
             ],
             plot_options: serde_json::to_value(PlotType::Regular).unwrap_or(Value::Null),
-            pipeline: Value::Null,
         }
     }
 }
@@ -101,6 +101,8 @@ pub struct DatView {
     formats: Vec<dv_io::FileFormat>,
     format: Option<String>,
     options: Options,
+    preferences: preferences::Preferences,
+    preset_ui: preferences::PresetUi,
     appearance: appearance::Appearance,
     channel_search: BTreeMap<usize, channels::SearchCache>,
     presentation: presentation::Presentation,
@@ -146,10 +148,11 @@ pub struct DatView {
 }
 impl DatView {
     pub fn new(cc: &eframe::CreationContext<'_>, launch: crate::Launch) -> Self {
-        let mut options: Options = cc
-            .storage
-            .and_then(|s| eframe::get_value(s, "options"))
-            .unwrap_or_default();
+        let preferences = preferences::Preferences::load(cc.storage);
+        let preset_ui = preferences::PresetUi::new(&preferences);
+        let mut options = preferences.startup();
+        // Layout and plot interaction caches are not settings presets.
+        cc.egui_ctx.memory_mut(|memory| *memory = Default::default());
         if launch.dayfirst {
             options.dayfirst = true;
         }
@@ -178,24 +181,20 @@ impl DatView {
                 }
             }
         } else {
-            match serde_json::from_value(options.pipeline.clone()) {
-                Ok(p) => p,
-                Err(e) if !options.pipeline.is_null() => {
-                    initial_errors.push(format!("Invalid persisted pipeline: {e}"));
-                    Pipeline::default()
-                }
-                Err(_) => Pipeline::default(),
-            }
+            Pipeline::default()
         };
         appearance::apply_theme(&cc.egui_ctx, options.dark, options.font_size);
         let mut appearance = appearance::Appearance::new();
         if let Err(error)=appearance.apply_font(&cc.egui_ctx,&options.style.font_family){initial_errors.push(error);}
+        let limits_text = options.style.limits.map(|b| b.iter().map(ToString::to_string).collect::<Vec<_>>().join(",")).unwrap_or_default();
         let mut app = Self {
             tables: TableList::default(),
             selections: BTreeMap::new(),
             formats: dv_io::all_formats(),
             format: launch.format,
             options,
+            preferences,
+            preset_ui,
             appearance,
             channel_search: BTreeMap::new(),
             presentation: presentation::Presentation::default(),
@@ -237,7 +236,7 @@ impl DatView {
             last_watch: Instant::now(),
             mtimes: BTreeMap::new(),
             data_row: 0,
-            limits_text: String::new(),
+            limits_text,
             vertices: Vec::new(),
             overlay_vertices: Vec::new(),
             vertex_style: None,
@@ -564,7 +563,7 @@ impl DatView {
                     ui.checkbox(&mut self.measure_enabled,"Measure plot (two clicks)");
                     if ui.button("Clear measurements and fits").clicked(){self.measurements.clear();self.overlays.clear();}
                 });
-                ui.menu_button("Help",|ui|{ui.label("rustDatView — a Rust implementation of pyDatView");ui.label("Select tables and X/Y columns at left. Pan/zoom with the mouse.\nDouble-click resets plot bounds. Ctrl-drop appends files.\nFormulas use {column name}; settings and pipeline persist on exit.");});
+                ui.menu_button("Help",|ui|{ui.label("rustDatView — a Rust implementation of pyDatView");ui.label("Select tables and X/Y columns at left. Pan/zoom with the mouse.\nDouble-click resets plot bounds. Ctrl-drop appends files.\nFormulas use {column name}. Startup defaults and presets: File → Options.");});
             });
             ui.horizontal_wrapped(|ui|{
                 if ui.button("Open").clicked(){self.open_dialog(false);}
@@ -825,6 +824,7 @@ impl eframe::App for DatView {
             Page::Fields => self.fields_view(ui, ctx),
         });
         self.editor_window(ctx);
+        self.recovery_window(ctx);
         if !self.errors.is_empty() {
             egui::Window::new("Messages")
                 .default_width(600.0)
@@ -844,10 +844,10 @@ impl eframe::App for DatView {
         }
     }
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        self.options.plot_options = serde_json::to_value(&self.plot_type).unwrap_or(Value::Null);
-        self.options.pipeline = serde_json::to_value(&self.pipeline).unwrap_or(Value::Null);
-        eframe::set_value(storage, "options", &self.options);
+        self.preferences.record(self.settings_snapshot());
+        self.preferences.store(storage);
     }
+    fn persist_egui_memory(&self) -> bool { false }
 }
 
 fn combo(ui: &mut egui::Ui, label: &str, value: &mut String, choices: &[&str]) -> bool {
