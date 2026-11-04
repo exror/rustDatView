@@ -92,6 +92,8 @@ pub(crate) struct DatView {
     seen_problems: usize,
     toasts: Vec<Toast>,
     formula: ui::dialogs::formula::FormulaDialog,
+    analysis: ui::dialogs::analysis::AnalysisWindow,
+    processing: ui::dialogs::pipeline::PipelineDialog,
 }
 
 impl DatView {
@@ -181,6 +183,8 @@ impl DatView {
             seen_problems: 0,
             toasts: Vec::new(),
             formula: Default::default(),
+            analysis: Default::default(),
+            processing: Default::default(),
         };
         let session = launch.session.or_else(|| {
             if app.settings.restore_last_session && launch.paths.is_empty() {
@@ -397,6 +401,15 @@ impl DatView {
             ActionId::About => self.dialog = Dialog::About,
             ActionId::Fit => self.chart.fit_all(),
             ActionId::NewChannel => self.formula.open_new(),
+            ActionId::Processing => self.processing.open(&self.workspace),
+            ActionId::CurveFit => self.analysis.open_tool(ui::dialogs::analysis::Tool::Fit),
+            ActionId::Damping => self
+                .analysis
+                .open_tool(ui::dialogs::analysis::Tool::Damping),
+            ActionId::Fatigue => self
+                .analysis
+                .open_tool(ui::dialogs::analysis::Tool::Fatigue),
+            ActionId::StatsReport => self.analysis.open_tool(ui::dialogs::analysis::Tool::Report),
         }
     }
 
@@ -1421,6 +1434,9 @@ impl eframe::App for DatView {
                         }
                         None => {}
                     }
+                    if result.processing {
+                        self.processing.open(&self.workspace);
+                    }
                 });
         }
         if has_sources && self.stats_visible && self.view == View::Chart {
@@ -1490,6 +1506,23 @@ impl eframe::App for DatView {
                 self.notify(message, false)
             }
             Some(ui::dialogs::formula::FormulaOutcome::Failed(error)) => self.notify(error, true),
+            None => {}
+        }
+        match self.processing.show(&ctx, &mut self.workspace) {
+            Some(ui::dialogs::pipeline::PipelineOutcome::Applied(message)) => {
+                self.notify(message, false)
+            }
+            Some(ui::dialogs::pipeline::PipelineOutcome::Failed(error)) => self.notify(error, true),
+            None => {}
+        }
+        match self.analysis.show(&ctx, &mut self.workspace, &self.chart) {
+            Some(ui::dialogs::analysis::AnalysisOutcome::Notify(message)) => {
+                self.notify(message, false)
+            }
+            Some(ui::dialogs::analysis::AnalysisOutcome::AddTable(df, name)) => {
+                self.workspace.add_generated_table(df, &name);
+                self.notify(format!("Added “{name}” as a source"), false);
+            }
             None => {}
         }
         self.toast_overlay(root, &ctx);

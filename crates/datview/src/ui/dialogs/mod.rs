@@ -1,6 +1,8 @@
 //! Modal dialogs. Each dialog owns its draft state and applies changes to the
 //! workspace only when the user confirms.
+pub(crate) mod analysis;
 pub(crate) mod formula;
+pub(crate) mod pipeline;
 
 use eframe::egui::{self, RichText, Ui};
 

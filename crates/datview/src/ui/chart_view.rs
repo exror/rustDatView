@@ -491,6 +491,34 @@ pub(crate) fn with_chart<R>(
                 overlay: false,
             });
         }
+        for overlay in &workspace.overlays {
+            let Some(target) = indices
+                .iter()
+                .map(|&index| &workspace.series[index])
+                .find(|series| series.id == overlay.target)
+            else {
+                continue;
+            };
+            let mut id = overlay.target ^ 0x9e37_79b9_7f4a_7c15;
+            for byte in overlay.label.bytes() {
+                id = (id ^ u64::from(byte)).wrapping_mul(0x100000001b3);
+            }
+            lines.push(Series {
+                id,
+                label: &overlay.label,
+                unit: &target.unit,
+                x: &overlay.x,
+                y: &overlay.y,
+                generation: overlay.generation,
+                color: chart_theme.text,
+                width: settings.line_width + 0.4,
+                dash: Dash::Dashed,
+                draw: Draw::Lines,
+                marker_radius: 3.0,
+                visible: true,
+                overlay: true,
+            });
+        }
         let id = pane_id(name);
         panes.push(Pane {
             id,

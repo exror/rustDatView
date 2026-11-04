@@ -37,6 +37,7 @@ pub(crate) struct SidebarResponse {
     pub info: bool,
     pub changed: bool,
     pub formula: Option<FormulaRequest>,
+    pub processing: bool,
 }
 
 struct Preview {
@@ -275,6 +276,34 @@ impl Sidebar {
         if let Some(index) = remove {
             workspace.remove_source(index);
             output.changed = true;
+        }
+        let steps: Vec<String> = workspace
+            .pipeline
+            .actions
+            .iter()
+            .filter(|action| action.enabled)
+            .map(|action| action.plugin.summary())
+            .collect();
+        if !steps.is_empty() {
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                widgets::section_label(ui, "Processing");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if widgets::icon_button(ui, icons::SLIDERS, "Edit processing steps").clicked() {
+                        output.processing = true;
+                    }
+                });
+            });
+            ui.horizontal_wrapped(|ui| {
+                for step in &steps {
+                    if widgets::chip(ui, step)
+                        .on_hover_text("Edit processing steps")
+                        .clicked()
+                    {
+                        output.processing = true;
+                    }
+                }
+            });
         }
         ui.add_space(9.0);
         ui.separator();

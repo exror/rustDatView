@@ -33,6 +33,11 @@ pub(crate) enum ActionId {
     About,
     Fit,
     NewChannel,
+    Processing,
+    CurveFit,
+    Damping,
+    Fatigue,
+    StatsReport,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -378,6 +383,39 @@ pub(crate) static ACTIONS: &[Action] = &[
         global(Modifiers::COMMAND, Key::N),
         None,
         has_sources
+    ),
+    action!(
+        Processing,
+        "Processing pipeline…",
+        Data / 0,
+        None,
+        None,
+        has_sources
+    ),
+    action!(CurveFit, "Curve fit…", Analyze / 0, None, None, has_series),
+    action!(
+        Damping,
+        "Damping (logarithmic decrement)…",
+        Analyze / 0,
+        None,
+        None,
+        has_series
+    ),
+    action!(
+        Fatigue,
+        "Fatigue equivalent load…",
+        Analyze / 0,
+        None,
+        None,
+        has_series
+    ),
+    action!(
+        StatsReport,
+        "Statistics report…",
+        Analyze / 1,
+        None,
+        None,
+        has_series
     ),
     action!(
         Shortcuts,

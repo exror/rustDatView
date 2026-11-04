@@ -103,6 +103,18 @@ impl Source {
         )
     }
 }
+/// A model curve (fit, envelope) drawn dashed in the pane of its target series.
+/// Overlays are presentation only: never saved, exported as data or analyzed.
+#[derive(Clone, Debug)]
+pub(crate) struct Overlay {
+    pub target: u64,
+    pub label: String,
+    pub x: Vec<f64>,
+    pub y: Vec<f64>,
+    /// Changes whenever x/y change, for the chart's decimation cache.
+    pub generation: u64,
+}
+
 struct Watch {
     stamp: Option<loader::FileStamp>,
     changed: Option<Instant>,
@@ -125,6 +137,7 @@ pub(crate) struct Workspace {
     pub panes: PaneSettings,
     pub annotations: Vec<Annotation>,
     pub rules: Vec<RangeRule>,
+    pub overlays: Vec<Overlay>,
     loader: Loader,
     epoch: u64,
     pending: usize,
@@ -164,6 +177,7 @@ impl Workspace {
             panes: PaneSettings::default(),
             annotations: Vec::new(),
             rules: Vec::new(),
+            overlays: Vec::new(),
             loader: Loader::new(),
             epoch: 0,
             pending: 0,
@@ -680,6 +694,24 @@ impl Workspace {
     }
     pub(crate) fn search(&mut self, query: &str) -> Vec<usize> {
         self.search_cache.search(query)
+    }
+    /// Add an in-memory table (fit result, merge, stack) as a new source.
+    pub(crate) fn add_generated_table(&mut self, df: dv_core::DataFrame, name: &str) {
+        let ordinal = self
+            .sources
+            .iter()
+            .filter(|source| source.path.as_os_str().is_empty())
+            .count();
+        let mut table = dv_core::Table::from_df(df, name);
+        table.rename(name);
+        self.tables.tabs.push(table);
+        self.sources.push(Source {
+            name: name.to_owned(),
+            frame: ordinal,
+            frame_name: name.to_owned(),
+            ..Source::default()
+        });
+        self.refresh_catalog(false);
     }
     pub(crate) fn remove_source(&mut self, index: usize) {
         if index >= self.sources.len() {
