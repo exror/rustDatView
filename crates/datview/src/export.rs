@@ -486,6 +486,90 @@ fn preview(
     cache
 }
 
+/// A Python script reproducing the current chart: files, processing steps,
+/// formulas, plotted channels, mode and the main chart styling.
+pub(crate) fn python_script(
+    workspace: &Workspace,
+    chart: &ChartOptions,
+    mut options: dv_plot::ScriptOptions,
+) -> Result<String, String> {
+    use crate::workspace::Mode;
+    use dv_core::common::clean_col;
+    use dv_plot::{CompareMode, PlotType};
+    let mut selections = Vec::new();
+    for (index, (table, source)) in workspace
+        .tables
+        .tabs
+        .iter()
+        .zip(&workspace.sources)
+        .enumerate()
+    {
+        if !source.active {
+            continue;
+        }
+        let columns = table.data.columns();
+        let Some(x) = workspace.x_key.as_ref().and_then(|key| {
+            columns
+                .iter()
+                .position(|column| clean_col(&column.name) == *key)
+        }) else {
+            continue;
+        };
+        for key in &workspace.selected {
+            if let Some(y) = columns
+                .iter()
+                .position(|column| clean_col(&column.name) == *key)
+            {
+                selections.push((index, x, y));
+            }
+        }
+    }
+    if selections.is_empty() {
+        return Err("Plot at least one channel to export a script.".into());
+    }
+    options.grid = chart.grid;
+    options.legend = chart.legend;
+    options.log_x = chart.log_x;
+    options.log_y = chart.log_y;
+    options.flip_x = chart.flip_x;
+    options.flip_y = chart.flip_y;
+    options.title.clone_from(&chart.title);
+    options.x_label.clone_from(&chart.x_label);
+    options.y_label.clone_from(&chart.y_label);
+    let plot_type = match workspace.mode {
+        Mode::Signals | Mode::Compare => PlotType::Regular,
+        Mode::Distribution => PlotType::Pdf(workspace.options.pdf.clone()),
+        Mode::Spectrum => PlotType::Fft(workspace.options.fft.clone()),
+        Mode::Normalized => PlotType::MinMax(workspace.options.normalized.clone()),
+        Mode::Polar => PlotType::Polar(workspace.options.polar.clone()),
+    };
+    let active = workspace
+        .sources
+        .iter()
+        .filter(|source| source.active)
+        .count();
+    let comparison = (workspace.mode == Mode::Compare).then(|| {
+        let mode = workspace.options.compare_mode.unwrap_or(if active <= 1 {
+            CompareMode::OneTableColumns
+        } else if workspace.selected.len() == 1 {
+            CompareMode::TablesOneColumn
+        } else {
+            CompareMode::TablesSimilarColumns
+        });
+        (mode, workspace.options.compare_method)
+    });
+    let script = dv_plot::PythonScripter {
+        files: workspace.tables.unique_filenames(),
+        selections,
+        options,
+        plot_type,
+        comparison,
+    };
+    script
+        .generate(&workspace.tables.tabs, &workspace.pipeline)
+        .map_err(|error| error.to_string())
+}
+
 /// Returns a status or error for the app's toast/status area when an action is
 /// completed. The caller owns `open` and the serializable `figure` preferences.
 pub(crate) fn show_dialog(

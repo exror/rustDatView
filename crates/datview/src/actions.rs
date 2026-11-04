@@ -12,6 +12,8 @@ pub(crate) enum ActionId {
     SaveSessionAs,
     OpenSession,
     ExportFigure,
+    ExportData,
+    ExportScript,
     CopyFigure,
     Settings,
     Quit,
@@ -237,6 +239,22 @@ pub(crate) static ACTIONS: &[Action] = &[
         "Copy figure",
         File / 2,
         global(CMD_SHIFT, Key::C),
+        None,
+        has_series
+    ),
+    action!(
+        ExportData,
+        "Export data…",
+        File / 2,
+        global(CMD_SHIFT, Key::E),
+        None,
+        has_sources
+    ),
+    action!(
+        ExportScript,
+        "Export Python script…",
+        File / 2,
+        None,
         None,
         has_series
     ),

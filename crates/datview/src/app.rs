@@ -4,7 +4,7 @@ use std::{
 };
 
 use dv_core::common::clean_col;
-use dv_plot::{CompareMode, PlotType, PythonScripter};
+use dv_plot::PlotType;
 use eframe::egui::{self, Align, Layout, RichText, Stroke};
 
 use crate::{
@@ -94,6 +94,8 @@ pub(crate) struct DatView {
     formula: ui::dialogs::formula::FormulaDialog,
     analysis: ui::dialogs::analysis::AnalysisWindow,
     processing: ui::dialogs::pipeline::PipelineDialog,
+    data_export: ui::dialogs::exports::DataExportDialog,
+    script_export: ui::dialogs::exports::ScriptDialog,
 }
 
 impl DatView {
@@ -185,6 +187,8 @@ impl DatView {
             formula: Default::default(),
             analysis: Default::default(),
             processing: Default::default(),
+            data_export: Default::default(),
+            script_export: Default::default(),
         };
         let session = launch.session.or_else(|| {
             if app.settings.restore_last_session && launch.paths.is_empty() {
@@ -402,6 +406,8 @@ impl DatView {
             ActionId::Fit => self.chart.fit_all(),
             ActionId::NewChannel => self.formula.open_new(),
             ActionId::Processing => self.processing.open(&self.workspace),
+            ActionId::ExportData => self.data_export.open(&self.workspace, &self.chart),
+            ActionId::ExportScript => self.script_export.open(),
             ActionId::CurveFit => self.analysis.open_tool(ui::dialogs::analysis::Tool::Fit),
             ActionId::Damping => self
                 .analysis
@@ -1508,6 +1514,19 @@ impl eframe::App for DatView {
             Some(ui::dialogs::formula::FormulaOutcome::Failed(error)) => self.notify(error, true),
             None => {}
         }
+        for outcome in [
+            self.data_export.show(&ctx, &self.workspace, &self.chart),
+            self.script_export
+                .show(&ctx, &self.workspace, &self.chart_options),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            match outcome {
+                ui::dialogs::exports::ExportOutcome::Done(message) => self.notify(message, false),
+                ui::dialogs::exports::ExportOutcome::Failed(error) => self.notify(error, true),
+            }
+        }
         match self.processing.show(&ctx, &mut self.workspace) {
             Some(ui::dialogs::pipeline::PipelineOutcome::Applied(message)) => {
                 self.notify(message, false)
@@ -1761,59 +1780,11 @@ pub(crate) fn headless_export(launch: &Launch, path: &Path) -> Result<(), String
         .and_then(|s| s.to_str())
         .is_some_and(|s| s.eq_ignore_ascii_case("py"))
     {
-        let mut selections = Vec::new();
-        for (index, (table, source)) in workspace
-            .tables
-            .tabs
-            .iter()
-            .zip(&workspace.sources)
-            .enumerate()
-        {
-            if !source.active {
-                continue;
-            }
-            let Some(x) = workspace.x_key.as_ref().and_then(|key| {
-                table
-                    .data
-                    .columns()
-                    .iter()
-                    .position(|column| clean_col(&column.name) == *key)
-            }) else {
-                continue;
-            };
-            for key in &workspace.selected {
-                if let Some(y) = table
-                    .data
-                    .columns()
-                    .iter()
-                    .position(|column| clean_col(&column.name) == *key)
-                {
-                    selections.push((index, x, y));
-                }
-            }
-        }
-        let mut script = PythonScripter {
-            files: workspace.tables.unique_filenames(),
-            selections,
-            plot_type: plot_type(&workspace),
-            ..Default::default()
-        };
-        if workspace.mode == Mode::Compare {
-            let mode = workspace
-                .options
-                .compare_mode
-                .unwrap_or(if workspace.sources.len() == 1 {
-                    CompareMode::OneTableColumns
-                } else if workspace.selected.len() == 1 {
-                    CompareMode::TablesOneColumn
-                } else {
-                    CompareMode::TablesSimilarColumns
-                });
-            script.comparison = Some((mode, workspace.options.compare_method));
-        }
-        let text = script
-            .generate(&workspace.tables.tabs, &workspace.pipeline)
-            .map_err(|e| e.to_string())?;
+        let text = export::python_script(
+            &workspace,
+            &chart_options,
+            dv_plot::ScriptOptions::default(),
+        )?;
         return std::fs::write(path, text).map_err(|e| e.to_string());
     }
     export::save(
