@@ -304,37 +304,6 @@ fn sample_named(map: &[Rgb], v: f64, reverse: bool) -> Rgb {
     map[if reverse { map.len() - 1 - i } else { i }]
 }
 // Canonical map tables and registry follow below.
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn hls_roundtrip() {
-        for c in [
-            [0., 0., 0.],
-            [1., 1., 1.],
-            [0.3, 0.5, 0.4],
-            [0.1, 0.9, 0.9],
-            [0.9, 0.1, 0.9],
-        ] {
-            let out = hls_to_rgb(rgb_to_hls(c));
-            for (a, b) in out.iter().zip(c) {
-                assert!((a - b).abs() < 1e-12);
-            }
-        }
-    }
-    #[test]
-    fn hex_and_cycle() {
-        assert_eq!(rgb2hex(hex2rgb("#1F77B4").unwrap()), "#1F77B4");
-        assert_eq!(python_color(10), python_color(0));
-    }
-    #[test]
-    fn canonical_maps() {
-        let c = cmap_colors(2, "viridis").unwrap();
-        assert_eq!(c[0], [0.267004, 0.004874, 0.329415]);
-        assert_eq!(c[1], [0.993248, 0.906157, 0.143936]);
-        assert!(cmap_colors(2, "unknown").is_err());
-    }
-}
 
 fn named_map(name: &str) -> Result<(&'static [Rgb], bool)> {
     let (name, reverse) = name
@@ -23838,3 +23807,34 @@ static MAP_WINTER: [Rgb; 256] = [
     [0.0, 0.996078431372549, 0.5019607843137255],
     [0.0, 1.0, 0.5],
 ];
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn hls_roundtrip() {
+        for c in [
+            [0., 0., 0.],
+            [1., 1., 1.],
+            [0.3, 0.5, 0.4],
+            [0.1, 0.9, 0.9],
+            [0.9, 0.1, 0.9],
+        ] {
+            let out = hls_to_rgb(rgb_to_hls(c));
+            for (a, b) in out.iter().zip(c) {
+                assert!((a - b).abs() < 1e-12);
+            }
+        }
+    }
+    #[test]
+    fn hex_and_cycle() {
+        assert_eq!(rgb2hex(hex2rgb("#1F77B4").unwrap()), "#1F77B4");
+        assert_eq!(python_color(10), python_color(0));
+    }
+    #[test]
+    fn canonical_maps() {
+        let c = cmap_colors(2, "viridis").unwrap();
+        assert_eq!(c[0], [0.267004, 0.004874, 0.329415]);
+        assert_eq!(c[1], [0.993248, 0.906157, 0.143936]);
+        assert!(cmap_colors(2, "unknown").is_err());
+    }
+}

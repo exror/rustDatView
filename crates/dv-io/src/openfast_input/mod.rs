@@ -11,7 +11,9 @@ mod specialized;
 mod wind;
 
 pub use deck::FastInputDeck;
+pub(crate) use input::looks_like_fast_input;
 pub use input::{FastInputFile, InputEntry, InputTable, InputValue};
+pub(crate) use rosco::looks_like_rosco_performance;
 pub use rosco::{RoscoDisconFile, RoscoPerformanceFile};
 pub use wind::{FastWindFile, StepDuration, StepWindOptions, WIND_COLUMNS};
 

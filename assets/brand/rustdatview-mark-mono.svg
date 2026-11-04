@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+<title id="title">rustDatView — monochrome mark</title>
+<defs><mask id="signal" maskUnits="userSpaceOnUse" x="0" y="0" width="256" height="256"><path fill="white" d="M0 0H256V256H0Z"/><path d="M34 144H58V126H74V166H92V118H103V85H124V98H143V88H158V111H171V127H153V141H127V129H111M135 141V157H148V173H163V160H178V145H195V158H222" fill="none" stroke="black" stroke-width="8" stroke-linejoin="miter"/></mask></defs>
+<g fill="currentColor"><path d="M128 24L218.067 76V180L128 232L37.933 180V76Z" mask="url(#signal)"/></g>
+</svg>

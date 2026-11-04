@@ -2,6 +2,10 @@
 
 Rust-native desktop implementation of [pyDatView](https://github.com/ebranlard/pyDatView): open tabulated scientific data, select channels, plot and compare signals, transform tables, and export results. The desktop application uses egui rather than wxPython; Python is not required to run it.
 
+### Logo
+
+Vector artwork and PNG exports live in [`assets/brand/`](assets/brand/). Use `rustdatview-logo.svg` on light backgrounds and `rustdatview-logo-dark.svg` for a brighter rainbow on dark backgrounds. The regular hexagonal mark contains a choppy, stepped data trace that abstracts the letter R and is available in rainbow and monochrome (`currentColor`). SVG wordmarks use outlined lettering and require no installed fonts. `rustdatview-preview.png` shows the light/dark treatments and small-size mark previews. These assets do not change the desktop application's icon.
+
 ## Binary downloads
 
 Download the archive for your machine from [GitHub Releases](https://github.com/exror/rustDatView/releases). Rust and Python are not needed to run these builds.

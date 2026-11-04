@@ -3,6 +3,43 @@ use super::binary::{broken, number, text_file};
 use dv_core::{DataFrame, FileObject, IoError, NamedFrame};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+
+fn header_start(text: &str) -> Option<usize> {
+    let mut lines = text.lines();
+    for i in 0..12 {
+        let line = lines.next()?;
+        let mut words = line.split_whitespace();
+        let Some(value) = words.next() else {
+            continue;
+        };
+        if !words.any(|word| word.eq_ignore_ascii_case("nComp")) {
+            continue;
+        }
+        let mut following = lines.clone();
+        let points = following.next()?;
+        let reference = following.next()?;
+        let has_labels = points
+            .split_whitespace()
+            .skip(1)
+            .any(|word| word.eq_ignore_ascii_case("nPoints"))
+            && reference
+                .split_whitespace()
+                .skip(1)
+                .any(|word| word.eq_ignore_ascii_case("RefPtID"));
+        let has_counts = value.parse::<usize>().is_ok()
+            && points.trim().parse::<usize>().is_ok()
+            && reference.trim().parse::<usize>().is_ok();
+        if has_labels || has_counts {
+            return Some(i);
+        }
+    }
+    None
+}
+
+pub(crate) fn looks_like_turbsim_ts(text: &str) -> bool {
+    header_start(text).is_some()
+}
+
 #[derive(Debug, Clone)]
 pub struct TurbSimTsFile {
     pub filename: PathBuf,
@@ -14,13 +51,16 @@ pub struct TurbSimTsFile {
 }
 impl TurbSimTsFile {
     pub fn read(path: &Path) -> Result<Self, IoError> {
+        if !crate::registry::text_prefix(path)?
+            .as_deref()
+            .is_some_and(looks_like_turbsim_ts)
+        {
+            return Err(IoError::WrongFormat("TurbSim nComp header missing".into()));
+        }
         let text = text_file(path)?;
+        let start = header_start(&text)
+            .ok_or_else(|| IoError::WrongFormat("TurbSim nComp header missing".into()))?;
         let lines = text.lines().collect::<Vec<_>>();
-        let start = lines
-            .iter()
-            .take(12)
-            .position(|l| l.to_lowercase().contains("ncomp"))
-            .ok_or_else(|| IoError::WrongFormat("TurbSim nComp marker missing".into()))?;
         let integer = |i: usize| -> Result<usize, IoError> {
             lines
                 .get(i)
@@ -39,6 +79,9 @@ impl TurbSimTsFile {
             return Err(broken(
                 "invalid TurbSim component count, point count or reference point",
             ));
+        }
+        if npoints > lines.len().saturating_sub(start + 5) {
+            return Err(broken("truncated TurbSim point list"));
         }
         let mut points = Vec::with_capacity(npoints);
         for i in 0..npoints {

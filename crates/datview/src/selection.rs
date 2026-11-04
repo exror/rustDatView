@@ -1,68 +1,48 @@
 use dv_core::{
-    common::{get_common_col_indices, no_unit},
-    Table, TableList,
+    common::no_unit,
+    units::{parse_unit, split_name_unit, UnitFamily},
+    Table,
 };
-use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
-pub(super) enum SelectionMode {
-    #[default]
-    Auto,
-    Common,
-    Independent,
-}
-
-/// Prefer a real time axis, then the generated sample index. Ties follow the
-/// explicit Time / Elapsed Time / Timestamp order, then source column order.
+/// Prefer the familiar time names in their historical order, then any other
+/// datetime column, then the generated index.
 pub(crate) fn default_x(table: &Table) -> usize {
     let columns = table.data.columns();
     columns
         .iter()
         .enumerate()
-        .filter(|(_, column)| column.is_float() || column.is_datetime())
-        .filter_map(|(index, column)| time_priority(&column.name).map(|rank| (rank, index)))
+        .filter(|(_, c)| c.is_float() || c.is_datetime())
+        .filter_map(|(i, c)| time_priority(&c.name).map(|rank| (rank, i)))
         .min()
-        .map(|(_, index)| index)
-        .or_else(|| columns.iter().position(|column| is_index(&column.name)))
+        .map(|(_, i)| i)
+        .or_else(|| columns.iter().position(|c| c.is_datetime()))
+        .or_else(|| columns.iter().position(|c| is_index(&c.name)))
+        .or_else(|| columns.iter().position(|c| c.is_float()))
         .unwrap_or(0)
 }
 
-/// Start with one plottable signal, not another time/index channel or an
-/// entirely missing numeric column. Constant signals remain useful telemetry.
-pub(crate) fn default_ys(table: &Table, x: usize) -> Vec<usize> {
-    table
-        .data
-        .columns()
-        .iter()
-        .enumerate()
-        .find(|(index, column)| {
-            *index != x
-                && !is_index(&column.name)
-                && time_priority(&column.name).is_none()
-                && column
-                    .floats()
-                    .is_some_and(|values| values.iter().any(|value| value.is_finite()))
-        })
-        .map(|(index, _)| vec![index])
-        .unwrap_or_default()
-}
-
-pub(super) fn is_index(name: &str) -> bool {
+pub(crate) fn is_index(name: &str) -> bool {
     no_unit(name).trim().eq_ignore_ascii_case("index")
 }
 
 fn time_priority(name: &str) -> Option<u8> {
     let name = no_unit(name);
     let mut words = name
-        .split(|character: char| character.is_whitespace() || character == '_')
-        .filter(|word| !word.is_empty());
+        .split(|c: char| c.is_whitespace() || c == '_')
+        .filter(|s| !s.is_empty());
     let first = words.next()?;
     let rank = if first.eq_ignore_ascii_case("time") {
         0
     } else if first.eq_ignore_ascii_case("timestamp") {
         2
+    } else if first.eq_ignore_ascii_case("datetime") {
+        3
+    } else if first.eq_ignore_ascii_case("date")
+        && words.next().is_some_and(|w| w.eq_ignore_ascii_case("time"))
+    {
+        3
     } else if first.eq_ignore_ascii_case("elapsed")
-        && words.next().is_some_and(|word| word.eq_ignore_ascii_case("time"))
+        && words.next().is_some_and(|w| w.eq_ignore_ascii_case("time"))
     {
         1
     } else {
@@ -71,7 +51,7 @@ fn time_priority(name: &str) -> Option<u8> {
     if let Some(unit) = words.next() {
         if !["s", "sec", "secs", "second", "seconds"]
             .iter()
-            .any(|candidate| unit.eq_ignore_ascii_case(candidate))
+            .any(|u| unit.eq_ignore_ascii_case(u))
         {
             return None;
         }
@@ -79,131 +59,175 @@ fn time_priority(name: &str) -> Option<u8> {
     words.next().is_none().then_some(rank)
 }
 
-/// Map primary-table choices by cleaned channel name, not position, when
-/// selected files share channels in a different order or use different units.
-pub(super) fn shared_columns(
-    tables: &TableList,
-    selected: &[usize],
-    mode: SelectionMode,
-) -> Option<Vec<Vec<usize>>> {
-    if mode == SelectionMode::Independent || selected.is_empty() {
-        return None;
+fn priority(family: UnitFamily, name: &str) -> usize {
+    let name = name.to_lowercase().replace(['_', '-'], " ");
+    let has = |s: &str| name.contains(s);
+    match family {
+        UnitFamily::Power => {
+            if has("package power") {
+                0
+            } else if has("ppt") {
+                1
+            } else if has("cpu power") {
+                2
+            } else if has("total power") {
+                3
+            } else {
+                4
+            }
+        }
+        UnitFamily::Frequency => {
+            let avg = has("avg") || has("average");
+            if has("effective clock") && avg {
+                0
+            } else if has("core clock") && avg {
+                1
+            } else if has("cpu clock") {
+                2
+            } else if has("effective clock") {
+                3
+            } else if has("core clock") {
+                4
+            } else {
+                5
+            }
+        }
+        UnitFamily::Temperature => {
+            if has("cpu package") {
+                0
+            } else if has("tctl") {
+                1
+            } else if has("tdie") {
+                2
+            } else if has("core max") {
+                3
+            } else {
+                4
+            }
+        }
+        _ => usize::MAX,
     }
-    let names = selected
+}
+
+/// Small tables show every usable numeric signal. Large telemetry tables pick
+/// one representative from power, frequency and temperature.
+pub(crate) fn default_ys(table: &Table, x: usize) -> Vec<usize> {
+    let columns = table.data.columns();
+    let usable: Vec<_> = columns
         .iter()
-        .map(|&i| tables.tabs[i].columns())
-        .collect::<Vec<_>>();
-    let common = get_common_col_indices(&names);
-    if mode == SelectionMode::Auto
-        && !tables.have_same_columns(Some(selected))
-        && common.keep.iter().any(|c| c.len() < 2)
-    {
-        return None;
+        .enumerate()
+        .filter(|(i, c)| {
+            *i != x
+                && !is_index(&c.name)
+                && c.floats().is_some_and(|v| v.iter().any(|n| n.is_finite()))
+        })
+        .collect();
+    let numeric_count = columns
+        .iter()
+        .filter(|c| (c.is_float() || c.is_datetime()) && !is_index(&c.name))
+        .count();
+    if numeric_count <= 8 {
+        return usable.into_iter().take(8).map(|(i, _)| i).collect();
     }
-    Some(common.keep)
+    let telemetry = [
+        UnitFamily::Power,
+        UnitFamily::Frequency,
+        UnitFamily::Temperature,
+        UnitFamily::Percent,
+    ]
+    .into_iter()
+    .filter(|family| {
+        usable.iter().any(|(_, c)| {
+            let (_, unit) = split_name_unit(&c.name);
+            parse_unit(&unit).family == *family
+        })
+    })
+    .count()
+        >= 2;
+    let mut picks = Vec::new();
+    for family in [
+        UnitFamily::Power,
+        UnitFamily::Frequency,
+        UnitFamily::Temperature,
+    ] {
+        if let Some((_, index)) = usable
+            .iter()
+            .filter_map(|(i, c)| {
+                let (_, unit) = split_name_unit(&c.name);
+                (parse_unit(&unit).family == family).then_some((priority(family, &c.name), *i))
+            })
+            .min()
+        {
+            picks.push(index);
+        }
+    }
+    if telemetry && !picks.is_empty() {
+        picks
+    } else {
+        usable
+            .into_iter()
+            .find(|(_, c)| time_priority(&c.name).is_none())
+            .map(|(i, _)| vec![i])
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dv_core::{DataFrame, Table};
-
-    fn numeric_table(names: &[&str]) -> Table {
+    use dv_core::{Column, DataFrame};
+    fn table(names: &[&str]) -> Table {
         Table::from_df(
-            DataFrame::from_floats(names.iter().copied(), vec![vec![1., 2.]; names.len()])
-                .unwrap(),
-            "telemetry",
+            DataFrame::from_floats(names.iter().copied(), vec![vec![1., 2.]; names.len()]).unwrap(),
+            "test",
         )
     }
-
     #[test]
-    fn time_axis_wins_over_reordered_metrics() {
-        let table = numeric_table(&["CPU Power [W]", "Core Clock [MHz]", "Time [s]"]);
-        assert_eq!(default_x(&table), 3);
-        assert_eq!(default_ys(&table, 3), vec![1]);
-        let reordered = numeric_table(&["Time (seconds)", "CPU Power [W]"]);
-        assert_eq!(default_x(&reordered), 1);
-        assert_eq!(default_ys(&reordered, 1), vec![2]);
-    }
-
-    #[test]
-    fn time_alias_ties_have_an_explicit_preference() {
-        let table = numeric_table(&[
-            "Timestamp",
-            "Elapsed Time [s]",
-            "Time [ms]",
-            "Time [s]",
-            "Temperature",
-        ]);
-        assert_eq!(default_x(&table), 3);
-        let elapsed = numeric_table(&["Power", "Elapsed Time seconds", "Timestamp"]);
-        assert_eq!(default_x(&elapsed), 2);
-    }
-
-    #[test]
-    fn datetime_time_is_a_valid_default_axis() {
-        let table = Table::from_df(
+    fn chooses_named_time_then_datetime_then_index() {
+        let t = table(&["Timestamp", "Elapsed Time [s]", "Time [ms]", "Power [W]"]);
+        assert_eq!(default_x(&t), 3);
+        let t = Table::from_df(
             DataFrame::from_columns(vec![
-                dv_core::Column::float("CPU Power", vec![10., 11.]),
-                dv_core::Column::datetime("Timestamp", vec![1., 2.]),
+                Column::float("Power", vec![1.]),
+                Column::datetime("Recorded", vec![2.]),
             ])
             .unwrap(),
-            "telemetry",
+            "test",
         );
-        assert_eq!(default_x(&table), 2);
-        assert_eq!(default_ys(&table, 2), vec![1]);
-    }
-
-    #[test]
-    fn metrics_without_time_use_index_not_first_metric() {
-        let table = numeric_table(&["CPU Power [W]", "CPU Temperature"]);
-        assert_eq!(default_x(&table), 0);
-        assert_eq!(default_ys(&table, 0), vec![1]);
-        let empty_signal = Table::from_df(
-            DataFrame::from_floats(
-                ["Missing", "Temperature"],
-                vec![vec![f64::NAN; 2], vec![35., 35.]],
-            )
-            .unwrap(),
-            "telemetry",
-        );
-        assert_eq!(default_ys(&empty_signal, default_x(&empty_signal)), vec![2]);
-        assert!(default_ys(&numeric_table(&["Time [s]"]), 1).is_empty());
+        assert_eq!(default_x(&t), 2);
+        assert_eq!(default_x(&table(&["Power"])), 0);
     }
     #[test]
-    fn shared_selection_matches_reordered_unit_channels() {
-        let first = Table::from_df(
+    fn small_tables_select_all_finite_non_index_signals() {
+        let t = Table::from_df(
             DataFrame::from_floats(
-                ["Time [s]", "Speed [m/s]"],
-                vec![vec![0., 1.], vec![2., 3.]],
+                ["Time [s]", "Power", "Missing", "Temperature"],
+                vec![
+                    vec![0., 1.],
+                    vec![3., 4.],
+                    vec![f64::NAN; 2],
+                    vec![35., 35.],
+                ],
             )
             .unwrap(),
-            "a",
+            "test",
         );
-        let second = Table::from_df(
-            DataFrame::from_floats(
-                ["Speed [km/h]", "Time (s)", "Other"],
-                vec![vec![7.2, 10.8], vec![0., 1.], vec![1., 1.]],
-            )
-            .unwrap(),
-            "b",
-        );
-        let tables = TableList::new(vec![first, second]);
-        assert_eq!(
-            shared_columns(&tables, &[0, 1], SelectionMode::Common),
-            Some(vec![vec![0, 1, 2], vec![0, 2, 1]])
-        );
-        assert_eq!(
-            shared_columns(&tables, &[0, 1], SelectionMode::Independent),
-            None
-        );
+        assert_eq!(default_ys(&t, default_x(&t)), vec![2, 4]);
     }
     #[test]
-    fn auto_does_not_map_unrelated_channels() {
-        let a = Table::from_df(DataFrame::from_floats(["A"], vec![vec![1.]]).unwrap(), "a");
-        let b = Table::from_df(DataFrame::from_floats(["B"], vec![vec![2.]]).unwrap(), "b");
-        assert!(
-            shared_columns(&TableList::new(vec![a, b]), &[0, 1], SelectionMode::Auto).is_none()
-        );
+    fn telemetry_prefers_representative_signals() {
+        let t = table(&[
+            "Time [s]",
+            "GPU Power [W]",
+            "CPU Package Power [W]",
+            "Core Clock [MHz]",
+            "Core Effective Clock Average [MHz]",
+            "GPU [°C]",
+            "CPU Tctl [°C]",
+            "Core 1 Load [%]",
+            "CPU Total [%]",
+            "Other",
+        ]);
+        assert_eq!(default_ys(&t, default_x(&t)), vec![3, 5, 7]);
     }
 }

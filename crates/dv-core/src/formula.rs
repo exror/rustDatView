@@ -515,6 +515,78 @@ fn call_function(name: &str, mut args: Vec<Val>) -> Result<Val> {
             let y = arr_of(args.pop().unwrap())?;
             Ok(Val::Arr(gradient(&y, xs.as_deref())?, false))
         }
+        "cumtrapz" | "cumulative_trapezoid" => {
+            // Running trapezoid integral starting at 0; `{P [W]}` over
+            // `{Time}` (seconds) gives energy in J. Gaps contribute nothing.
+            if nargs != 1 && nargs != 2 {
+                return Err(DvError::Formula(
+                    "`cumtrapz` expects 1 or 2 arguments".into(),
+                ));
+            }
+            let xs = if nargs == 2 {
+                Some(arr_of(args.pop().unwrap())?)
+            } else {
+                None
+            };
+            let y = arr_of(args.pop().unwrap())?;
+            if xs.as_ref().is_some_and(|x| x.len() != y.len()) {
+                return Err(DvError::Formula("cumtrapz: length mismatch".into()));
+            }
+            let mut total = 0.0;
+            let mut out = Vec::with_capacity(y.len());
+            for i in 0..y.len() {
+                if i > 0 {
+                    let dx = xs.as_ref().map_or(1.0, |x| x[i] - x[i - 1]);
+                    let step = 0.5 * (y[i] + y[i - 1]) * dx;
+                    if step.is_finite() {
+                        total += step;
+                    }
+                }
+                out.push(total);
+            }
+            Ok(Val::Arr(out, false))
+        }
+        "movmean" | "moving_average" => {
+            // Centered moving mean over `n` samples, ignoring missing values.
+            need(2)?;
+            let window = arr_of(args.pop().unwrap())?;
+            let y = arr_of(args.pop().unwrap())?;
+            let n = match window.as_slice() {
+                [w] if w.is_finite() && *w >= 1.0 => *w as usize,
+                _ => {
+                    return Err(DvError::Formula(
+                        "movmean: window must be a number ≥ 1".into(),
+                    ))
+                }
+            };
+            let (mut sum, mut count) = (0.0, 0usize);
+            let mut out = Vec::with_capacity(y.len());
+            let (before, after) = ((n - 1) / 2, n / 2);
+            let mut lo = 0;
+            let mut hi = 0; // exclusive
+            for i in 0..y.len() {
+                while hi < y.len() && hi <= i + after {
+                    if y[hi].is_finite() {
+                        sum += y[hi];
+                        count += 1;
+                    }
+                    hi += 1;
+                }
+                while lo + before < i {
+                    if y[lo].is_finite() {
+                        sum -= y[lo];
+                        count -= 1;
+                    }
+                    lo += 1;
+                }
+                out.push(if count > 0 {
+                    sum / count as f64
+                } else {
+                    f64::NAN
+                });
+            }
+            Ok(Val::Arr(out, false))
+        }
         "where" => {
             need(3)?;
             let b = arr_of(args.pop().unwrap())?;
@@ -806,6 +878,30 @@ mod tests {
             Column::datetime("Date", vec![0.0, 86400.0, 2.0 * 86400.0, 3.0 * 86400.0]),
         ])
         .unwrap()
+    }
+
+    #[test]
+    fn energy_integral_and_centered_moving_mean() {
+        let df = DataFrame::from_columns(vec![
+            Column::float("Time [s]", vec![0.0, 1.0, 3.0, 4.0]),
+            Column::float("Power [W]", vec![10.0, 20.0, f64::NAN, 40.0]),
+        ])
+        .unwrap();
+        // The NaN interval contributes nothing; the last step is (NaN+40)/2 → skipped too.
+        assert_eq!(
+            eval_formula(&df, "cumtrapz({Power}, {Time})").unwrap(),
+            [0.0, 15.0, 15.0, 15.0]
+        );
+        assert_eq!(
+            eval_formula(&df, "cumtrapz({Time})").unwrap(),
+            [0.0, 0.5, 2.5, 6.0]
+        );
+        // Window 3 is centered; the missing sample is ignored, not treated as zero.
+        assert_eq!(
+            eval_formula(&df, "movmean({Power}, 3)").unwrap(),
+            [15.0, 15.0, 30.0, 40.0]
+        );
+        assert!(eval_formula(&df, "movmean({Power}, 0)").is_err());
     }
 
     #[test]

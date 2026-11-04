@@ -106,20 +106,28 @@ pub fn format_float(x: f64) -> String {
     }
 }
 
-/// ISO-8601 representation of a datetime in seconds since epoch, `NaT` for NaN.
+/// ISO-8601-like representation of seconds since epoch, `NaT` for NaN. Epoch
+/// `f64` values resolve about 0.25 µs, so sub-microsecond digits are noise and
+/// are rounded away; milliseconds show three digits, finer values six.
 pub fn format_datetime(t: f64) -> String {
     if !t.is_finite() {
         return "NaT".to_string();
     }
-    let secs = t.floor();
-    let nanos = ((t - secs) * 1e9).round() as u32;
-    match DateTime::from_timestamp(secs as i64, nanos.min(999_999_999)) {
+    let mut secs = t.floor();
+    let mut micros = ((t - secs) * 1e6).round() as u32;
+    if micros >= 1_000_000 {
+        secs += 1.0;
+        micros = 0;
+    }
+    match DateTime::from_timestamp(secs as i64, micros * 1000) {
         Some(dt) => {
             let n = dt.naive_utc();
-            if nanos == 0 {
+            if micros == 0 {
                 n.format("%Y-%m-%d %H:%M:%S").to_string()
+            } else if micros % 1000 == 0 {
+                n.format("%Y-%m-%d %H:%M:%S%.3f").to_string()
             } else {
-                n.format("%Y-%m-%d %H:%M:%S%.f").to_string()
+                n.format("%Y-%m-%d %H:%M:%S%.6f").to_string()
             }
         }
         None => "NaT".to_string(),

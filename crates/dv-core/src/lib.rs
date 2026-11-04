@@ -14,6 +14,7 @@ pub mod error;
 pub mod file;
 pub mod formula;
 pub mod table;
+pub mod units;
 
 pub use dataframe::{Column, ColumnData, DataFrame};
 pub use error::{DvError, Result};

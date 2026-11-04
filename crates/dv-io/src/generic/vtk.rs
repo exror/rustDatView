@@ -26,7 +26,7 @@ fn arrays(attributes: Vec<Attribute>) -> Result<Vec<(String, usize, Vec<f64>)>, 
     Ok(result)
 }
 fn components(name: &str, n: usize, data: &[f64]) -> Result<Vec<Column>, IoError> {
-    if n == 0 || data.len() % n != 0 {
+    if n == 0 || !data.len().is_multiple_of(n) {
         return Err(super::broken(
             "VTK attribute has inconsistent component count",
         ));

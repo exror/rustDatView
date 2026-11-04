@@ -115,7 +115,7 @@ pub fn output(path: &Path) -> Result<Arc<dyn FileObject>, IoError> {
     let t0 = f32_at(&b, vp + 4)?;
     let dt = f32_at(&b, vp + 8)?;
     let data_start = vp + 12 + nc * 4;
-    if data_start > b.len() || (b.len() - data_start) % (nc * 2) != 0 {
+    if data_start > b.len() || !(b.len() - data_start).is_multiple_of(nc * 2) {
         return Err(broken("FLEX binary size mismatch"));
     }
     let nt = (b.len() - data_start) / (nc * 2);
@@ -146,11 +146,11 @@ pub fn output(path: &Path) -> Result<Arc<dyn FileObject>, IoError> {
     let mut values = vec![(0..nt)
         .map(|i| ((t0 + i as f64 * dt) as f32) as f64)
         .collect()];
-    for c in 0..nc {
+    for (c, row) in sensor.iter().enumerate() {
         cols.push(format!(
             "{}_[{}]",
-            sensor[c][6],
-            sensor[c][5].replace(['(', ')', '[', ']'], "")
+            row[6],
+            row[5].replace(['(', ')', '[', ']'], "")
         ));
         let scale = f32_at(&b, vp + 12 + c * 4)?;
         values.push(

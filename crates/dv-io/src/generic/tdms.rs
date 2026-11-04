@@ -328,7 +328,7 @@ fn decode(bytes: &[u8]) -> Result<Vec<Object>, IoError> {
                     ));
                 }
                 let stride = chunk / count;
-                if data.bytes.len() % stride != 0 {
+                if !data.bytes.len().is_multiple_of(stride) {
                     return Err(broken("truncated TDMS interleaved sample"));
                 }
                 for _ in 0..data.bytes.len() / stride {
@@ -386,7 +386,7 @@ fn decode(bytes: &[u8]) -> Result<Vec<Object>, IoError> {
                                 let sample = data.sample(r.kind)?;
                                 objects[*i].append(r.kind, sample)?;
                             }
-                            if count < r.count && remaining % w != 0 {
+                            if count < r.count && !remaining.is_multiple_of(w) {
                                 return Err(broken("truncated TDMS sample"));
                             }
                         }
@@ -431,7 +431,7 @@ pub fn read(path: &Path) -> Result<Arc<dyn FileObject>, IoError> {
         let Some(values) = &object.values else {
             continue;
         };
-        if values.len() == 0 {
+        if values.is_empty() {
             continue;
         }
         let parts = paths(&object.path)?;

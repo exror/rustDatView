@@ -9,6 +9,7 @@
 pub mod csv;
 pub mod excel;
 pub(crate) mod hdf;
+pub mod hml;
 pub mod matlab;
 pub mod netcdf;
 mod netcdf_hdf;
@@ -18,7 +19,7 @@ pub mod tdms;
 pub mod vtk;
 
 use crate::registry::{FileFormat, Writer};
-use dv_core::{DataFrame, Field2D, FileObject, IoError, NamedFrame};
+use dv_core::{ColumnData, DataFrame, Field2D, FileObject, IoError, NamedFrame};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -42,7 +43,41 @@ impl FileObject for GenericFile {
         Ok(self.frames.clone())
     }
     fn to_2d_fields(&self) -> Option<Result<Vec<Field2D>, IoError>> {
-        self.fields.as_ref().map(|f| Ok(f.clone()))
+        if let Some(fields) = &self.fields {
+            return Some(Ok(fields.clone()));
+        }
+        if self.format != "CSV file" {
+            return None;
+        }
+        let df = &self.frames.first()?.df;
+        if df.is_empty() {
+            return None;
+        }
+        let skip = usize::from(df.column(0).name.eq_ignore_ascii_case("index"));
+        let columns = &df.columns()[skip..];
+        if !columns
+            .iter()
+            .all(|c| matches!(c.data, ColumnData::Float(_) | ColumnData::DateTime(_)))
+        {
+            return None;
+        }
+        let mut m = Vec::with_capacity(df.nrows() * columns.len());
+        for row in 0..df.nrows() {
+            for column in columns {
+                match &column.data {
+                    ColumnData::Float(values) | ColumnData::DateTime(values) => m.push(values[row]),
+                    ColumnData::Str(_) => unreachable!(),
+                }
+            }
+        }
+        Some(Ok(vec![Field2D {
+            name: "data".into(),
+            x: (0..df.nrows()).map(|i| i as f64).collect(),
+            y: (0..columns.len()).map(|i| i as f64).collect(),
+            sx: "rows".into(),
+            sy: "columns".into(),
+            m,
+        }]))
     }
     fn info(&self) -> String {
         let tables = self
@@ -90,9 +125,15 @@ pub fn formats() -> Vec<FileFormat> {
     vec![
         FileFormat {
             name: "CSV file",
-            extensions: &[".csv", ".txt"],
+            extensions: &[".csv", ".txt", ".log"],
             priority: 0,
             read: csv::read,
+        },
+        FileFormat {
+            name: "MSI Afterburner HML",
+            extensions: &[".hml"],
+            priority: 60,
+            read: hml::read,
         },
         FileFormat {
             name: "Excel file",
