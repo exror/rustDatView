@@ -105,6 +105,16 @@ impl Settings {
     }
 }
 
+/// Every settings section shares one label column, so controls line up.
+fn grid<R>(ui: &mut egui::Ui, id: &str, contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::Grid::new(id)
+        .num_columns(2)
+        .spacing(egui::vec2(20.0, 8.0))
+        .min_col_width(118.0)
+        .show(ui, contents)
+        .inner
+}
+
 /// Preferences take effect immediately. The caller persists them through `save`
 /// and applies non-appearance preferences to the workspace/chart.
 pub(crate) fn show(
@@ -126,51 +136,50 @@ pub(crate) fn show(
         .collapsible(false)
         .resizable(true)
         .show(ctx, |ui| {
+            // The buttons stay visible below the scrolling sections.
             egui::ScrollArea::vertical()
                 .id_salt("settings-scroll")
+                .max_height((ui.available_height() - 44.0).max(120.0))
                 .show(ui, |ui| {
-                    ui.heading("Appearance");
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
+                    let section = |ui: &mut egui::Ui, title: &str| {
+                        ui.add_space(10.0);
+                        ui.label(egui::RichText::new(title).strong().size(14.0));
+                        ui.add_space(4.0);
+                    };
+                    section(ui, "Appearance");
+                    grid(ui, "settings-appearance", |ui| {
                         ui.label("Theme");
-                        ui.selectable_value(&mut settings.theme, ThemeChoice::System, "System");
-                        ui.selectable_value(&mut settings.theme, ThemeChoice::Dark, "Dark");
-                        ui.selectable_value(&mut settings.theme, ThemeChoice::Light, "Light");
+                        if let Some(theme) = crate::ui::widgets::segmented(
+                            ui,
+                            settings.theme,
+                            &[
+                                (ThemeChoice::System, "System", "Follow the Windows app mode"),
+                                (ThemeChoice::Dark, "Dark", ""),
+                                (ThemeChoice::Light, "Light", ""),
+                            ],
+                        ) {
+                            settings.theme = theme;
+                        }
+                        ui.end_row();
+                        ui.label("Interface scale");
+                        let mut percent = settings.scale * 100.0;
+                        if ui.add(egui::Slider::new(&mut percent, 80.0..=200.0).step_by(5.0).suffix(" %")).changed() {
+                            settings.scale = percent / 100.0;
+                        }
+                        ui.end_row();
+                        ui.label("Font");
+                        ui.vertical(|ui| {
+                            appearance.font_picker(ui, &mut settings.font_family);
+                            if let Some(error) = &appearance.font_error {
+                                ui.colored_label(ui.visuals().error_fg_color, error);
+                            }
+                        });
+                        ui.end_row();
                     });
-                    let mut percent = settings.scale * 100.0;
-                    if ui
-                        .add(
-                            egui::Slider::new(&mut percent, 80.0..=200.0)
-                                .step_by(5.0)
-                                .suffix("%")
-                                .text("Interface scale"),
-                        )
-                        .changed()
-                    {
-                        settings.scale = percent / 100.0;
-                    }
-                    ui.horizontal(|ui| {
-                        ui.label("Interface font");
-                        appearance.font_picker(ui, &mut settings.font_family);
-                    });
-                    if let Some(error) = &appearance.font_error {
-                        ui.colored_label(ui.visuals().error_fg_color, error);
-                    }
-                    ui.weak("Bundled fonts remain available as fallbacks.");
 
-                    ui.add_space(12.0);
-                    ui.separator();
-                    ui.add_space(6.0);
-                    ui.heading("Chart defaults");
-                    ui.add_space(4.0);
-                    ui.add(
-                        egui::Slider::new(&mut settings.line_width, 0.5..=6.0)
-                            .step_by(0.1)
-                            .suffix(" pt")
-                            .text("Line width"),
-                    );
-                    ui.horizontal(|ui| {
-                        ui.label("Series palette");
+                    section(ui, "Charts");
+                    grid(ui, "settings-charts", |ui| {
+                        ui.label("Series colors");
                         egui::ComboBox::from_id_salt("series-palette")
                             .selected_text(match settings.palette {
                                 SeriesPalette::Standard => "Standard",
@@ -178,104 +187,93 @@ pub(crate) fn show(
                                 SeriesPalette::ColorVisionFriendly => "Color-vision friendly",
                             })
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut settings.palette,
-                                    SeriesPalette::Standard,
-                                    "Standard",
-                                );
-                                ui.selectable_value(
-                                    &mut settings.palette,
-                                    SeriesPalette::Vivid,
-                                    "Vivid",
-                                );
-                                ui.selectable_value(
-                                    &mut settings.palette,
-                                    SeriesPalette::ColorVisionFriendly,
-                                    "Color-vision friendly",
-                                );
+                                ui.selectable_value(&mut settings.palette, SeriesPalette::Standard, "Standard");
+                                ui.selectable_value(&mut settings.palette, SeriesPalette::Vivid, "Vivid");
+                                ui.selectable_value(&mut settings.palette, SeriesPalette::ColorVisionFriendly, "Color-vision friendly");
                             });
-                    });
-                    ui.weak("Choose distinct series colors for charts and channel markers.");
-                    ui.checkbox(&mut settings.show_sparklines, "Show channel sparklines")
-                        .on_hover_text("Show a small preview beside each channel.");
-                    ui.checkbox(&mut settings.overview, "Show overview strip")
-                        .on_hover_text("Show a full-range navigator for time series with at least 2,000 samples.");
-                    ui.checkbox(&mut settings.break_gaps, "Break lines at gaps")
-                        .on_hover_text("Avoid drawing a line across missing or widely spaced samples.");
-                    ui.add_enabled_ui(settings.break_gaps, |ui| {
-                        ui.add(
-                            egui::Slider::new(&mut settings.gap_factor, 1.0..=1000.0)
-                                .logarithmic(true)
-                                .suffix("×")
-                                .text("Gap threshold"),
-                        );
-                        ui.weak("A gap exceeds this multiple of the median sample interval.");
-                    });
-                    ui.add(
-                        egui::Slider::new(&mut settings.precision, 1..=12)
-                            .text("Significant digits"),
-                    );
-
-                    ui.add_space(12.0);
-                    ui.separator();
-                    ui.add_space(6.0);
-                    ui.heading("Data and startup");
-                    ui.add_space(4.0);
-                    ui.checkbox(&mut settings.dayfirst, "Parse ambiguous dates day first")
-                        .on_hover_text("For example, read 03/04 as 3 April rather than March 4. Applies to newly opened or reloaded files.");
-                    ui.checkbox(&mut settings.watch_default, "Follow files by default")
-                        .on_hover_text("Enable Follow when the application starts.");
-                    ui.checkbox(
-                        &mut settings.restore_last_session,
-                        "Restore the last session on startup",
-                    )
-                    .on_hover_text("Open the most recently saved or opened session on startup, unless files were passed on the command line.");
-                    ui.weak("Without automatic restore, sessions are opened explicitly.");
-
-                    ui.add_space(12.0);
-                    ui.separator();
-                    ui.add_space(6.0);
-                    ui.heading("Recent items");
-                    ui.horizontal(|ui| {
-                        let files = settings.recent_files.len();
-                        let sessions = settings.recent_sessions.len();
-                        ui.label(format!(
-                            "{files} {} · {sessions} {}",
-                            if files == 1 { "file" } else { "files" },
-                            if sessions == 1 { "session" } else { "sessions" }
-                        ));
-                        if ui
-                            .add_enabled(
-                                files + sessions > 0,
-                                egui::Button::new("Clear recent items"),
+                        ui.end_row();
+                        ui.label("Line width");
+                        ui.add(egui::Slider::new(&mut settings.line_width, 0.5..=6.0).step_by(0.1).suffix(" px"));
+                        ui.end_row();
+                        ui.label("Significant digits");
+                        ui.add(egui::Slider::new(&mut settings.precision, 1..=12))
+                            .on_hover_text("Digits shown in readouts, legends and statistics");
+                        ui.end_row();
+                        ui.label("Gaps");
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut settings.break_gaps, "Break lines after")
+                                .on_hover_text("Do not draw a line across missing or widely spaced samples");
+                            ui.add_enabled(
+                                settings.break_gaps,
+                                egui::DragValue::new(&mut settings.gap_factor).range(1.0..=1000.0).speed(0.2).suffix("×"),
                             )
-                            .clicked()
-                        {
-                            settings.recent_files.clear();
-                            settings.recent_sessions.clear();
-                        }
+                            .on_hover_text("Multiple of the median sample interval");
+                            ui.label("the usual interval");
+                        });
+                        ui.end_row();
+                        ui.label("Show");
+                        ui.vertical(|ui| {
+                            ui.checkbox(&mut settings.show_sparklines, "Channel sparklines")
+                                .on_hover_text("A small preview beside each channel in the sidebar");
+                            ui.checkbox(&mut settings.overview, "Overview strip")
+                                .on_hover_text("A full-range navigator below time series with at least 2,000 samples");
+                        });
+                        ui.end_row();
                     });
-                    ui.add_space(12.0);
-                    ui.separator();
+
+                    section(ui, "Data and startup");
+                    grid(ui, "settings-data", |ui| {
+                        ui.label("Dates");
+                        ui.checkbox(&mut settings.dayfirst, "Day first when ambiguous")
+                            .on_hover_text("Read 03/04 as 3 April rather than March 4. Applies to newly opened or reloaded files.");
+                        ui.end_row();
+                        ui.label("Startup");
+                        ui.vertical(|ui| {
+                            ui.checkbox(&mut settings.watch_default, "Follow files")
+                                .on_hover_text("Watch opened files for new data and keep the latest samples in view");
+                            ui.checkbox(&mut settings.restore_last_session, "Restore the last session")
+                                .on_hover_text("Unless files are passed on the command line");
+                        });
+                        ui.end_row();
+                        ui.label("Recent items");
+                        ui.horizontal(|ui| {
+                            let files = settings.recent_files.len();
+                            let sessions = settings.recent_sessions.len();
+                            ui.label(format!(
+                                "{files} {} · {sessions} {}",
+                                if files == 1 { "file" } else { "files" },
+                                if sessions == 1 { "session" } else { "sessions" }
+                            ));
+                            if ui.add_enabled(files + sessions > 0, egui::Button::new("Clear")).clicked() {
+                                settings.recent_files.clear();
+                                settings.recent_sessions.clear();
+                            }
+                        });
+                        ui.end_row();
+                    });
                     ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        if ui
-                            .button("Reset to defaults")
-                            .on_hover_text("Reset preferences; keep recent items.")
-                            .clicked()
-                        {
-                            let files = std::mem::take(&mut settings.recent_files);
-                            let sessions = std::mem::take(&mut settings.recent_sessions);
-                            *settings = Settings::default();
-                            settings.recent_files = files;
-                            settings.recent_sessions = sessions;
-                            appearance.font_error = None;
-                        }
-                        if ui.button("Close").clicked() {
-                            close = true;
-                        }
-                    });
                 });
+            ui.separator();
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .button("Reset to defaults")
+                    .on_hover_text("Reset preferences; keep recent items")
+                    .clicked()
+                {
+                    let files = std::mem::take(&mut settings.recent_files);
+                    let sessions = std::mem::take(&mut settings.recent_sessions);
+                    *settings = Settings::default();
+                    settings.recent_files = files;
+                    settings.recent_sessions = sessions;
+                    appearance.font_error = None;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Done").clicked() {
+                        close = true;
+                    }
+                });
+            });
         });
     if close {
         *open = false;

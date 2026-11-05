@@ -913,7 +913,7 @@ impl DatView {
                             .on_hover_text("Show problems");
                         }
                         let following = self.workspace.follow;
-                        if ui
+                        if !self.workspace.sources.is_empty() && ui
                             .add(
                                 egui::Button::new(
                                     RichText::new(if following { "●  Following" } else { "Follow" })

@@ -515,7 +515,10 @@ fn style(dark: bool) -> egui::Style {
     visuals.widgets.noninteractive.bg_fill = tokens.panel_bg;
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, tokens.border);
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, tokens.text);
-    visuals.widgets.inactive.bg_fill = tokens.surface;
+    // Slider rails and checkbox boxes use `bg_fill`; a surface-coloured rail
+    // disappears on surface-coloured panels, especially in the light theme.
+    visuals.widgets.inactive.bg_fill = tokens.border;
+    visuals.slider_trailing_fill = true;
     visuals.widgets.inactive.weak_bg_fill = tokens.surface;
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, tokens.border);
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, tokens.text);
