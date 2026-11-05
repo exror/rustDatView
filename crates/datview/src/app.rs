@@ -1476,17 +1476,19 @@ impl DatView {
         }
     }
 
-    fn dialogs(&mut self, ctx: &egui::Context) {
-        // Windows (unlike modals) do not close on Escape by themselves.
+    /// Windows (unlike modals) do not close on Escape by themselves. Runs
+    /// before the chart, which would otherwise take Escape to clear a selection.
+    fn close_window_on_escape(&mut self, ctx: &egui::Context) {
         if matches!(
             self.dialog,
             Dialog::Settings | Dialog::Shortcuts | Dialog::About | Dialog::OpenFormat
-        ) && (matches!(self.dialog, Dialog::Settings) || !ctx.text_edit_focused())
-            && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+        ) && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
             self.dialog = Dialog::None;
-            return;
         }
+    }
+
+    fn dialogs(&mut self, ctx: &egui::Context) {
         match self.dialog {
             Dialog::None => {}
             Dialog::Settings => {
@@ -1759,6 +1761,7 @@ impl eframe::App for DatView {
         if self.view == View::Fields && !self.fields.available() {
             self.view = View::Chart;
         }
+        self.close_window_on_escape(&ctx);
         self.topbar(root, &ctx);
         self.statusbar(root, &ctx);
         let has_sources = !self.workspace.tables.is_empty();

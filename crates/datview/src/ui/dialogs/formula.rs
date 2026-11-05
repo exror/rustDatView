@@ -271,7 +271,7 @@ impl FormulaDialog {
             .is_none_or(|(cached, _)| cached != &key)
         {
             let result = if self.expression.trim().is_empty() {
-                Err("Enter a formula.".to_owned())
+                Err("Type a formula to preview the new channel.".to_owned())
             } else {
                 eval_formula(&table.data, &self.expression)
                     .map(|values| Preview::new(&values))
@@ -331,7 +331,13 @@ impl FormulaDialog {
                         ui.label(RichText::new(text).color(tokens.text_secondary));
                     }
                     Err(error) => {
-                        ui.label(RichText::new(error).color(tokens.error));
+                        // An empty formula is a prompt, not a mistake.
+                        let color = if self.expression.trim().is_empty() {
+                            tokens.text_muted
+                        } else {
+                            tokens.error
+                        };
+                        ui.label(RichText::new(error).color(color));
                     }
                 }
             });
