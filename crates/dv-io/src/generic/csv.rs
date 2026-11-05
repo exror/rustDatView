@@ -1021,12 +1021,13 @@ pub fn read_with_options(
     let df = super::frame(columns)?;
     let mut detail = format!(
         "Encoding: {encoding}\nSeparator: {}",
-        if separator == b' ' {
-            "whitespace".to_owned()
-        } else if separator == b'\t' {
-            "tab".to_owned()
-        } else {
-            char::from(separator).to_string()
+        match separator {
+            b' ' => "whitespace".to_owned(),
+            b'\t' => "tab".to_owned(),
+            b',' => "comma".to_owned(),
+            b';' => "semicolon".to_owned(),
+            b'|' => "vertical bar".to_owned(),
+            other => format!("“{}”", char::from(other)),
         }
     );
     if trailing {

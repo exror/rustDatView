@@ -43,11 +43,24 @@ impl InfoView {
                             let value = dv_core::dataframe::format_datetime(time.as_secs_f64());
                             value.split('.').next().unwrap_or(&value).to_owned()
                         });
+                    // The format and the size of a single table are already
+                    // shown above; keep what the reader adds beyond them.
                     let reader_info = table
                         .fileobject
                         .as_ref()
-                        .map(|file| file.info().replace("\n: ", "\n"))
-                        .filter(|s| !s.trim().is_empty());
+                        .map(|file| {
+                            let format = file.format_name();
+                            let info = file.info().replace("\n: ", "\n");
+                            let table_line = |line: &str| line.ends_with(" columns") && line.contains(" rows, ");
+                            let single_table = info.lines().filter(|line| table_line(line)).count() <= 1;
+                            info.lines()
+                                .map(str::trim)
+                                .filter(|line| !line.is_empty() && *line != format)
+                                .filter(|line| !(single_table && table_line(line)))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        })
+                        .filter(|s| !s.is_empty());
                     let visible_rows = table.mask.as_ref().map_or(table.data.nrows(), |mask| {
                         mask.iter().filter(|&&visible| visible).count()
                     });
