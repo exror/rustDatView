@@ -450,10 +450,16 @@ impl XInput {
 
 fn x_row(ui: &mut egui::Ui, name: &str, value: &mut f64, input: XInput) {
     ui.label(name);
+    ui.add(x_drag(value, input));
+    ui.end_row();
+}
+
+/// A drag value that shows and accepts X positions in the axis' own format.
+fn x_drag(value: &mut f64, input: XInput) -> egui::DragValue<'_> {
     // Typing a time of day keeps the date of the current position.
     let day = (*value / 86_400.0).floor() * 86_400.0;
     let drag = egui::DragValue::new(value).range(-f64::MAX..=f64::MAX).speed(0.1);
-    let drag = match input {
+    match input {
         XInput::Number => drag,
         XInput::Clock => drag
             .custom_formatter(|v, _| format::format_time(v, 0.1))
@@ -461,9 +467,7 @@ fn x_row(ui: &mut egui::Ui, name: &str, value: &mut f64, input: XInput) {
         XInput::Duration => drag
             .custom_formatter(|v, _| if v.abs() < 60.0 { format::format_value(v, "s", 6) } else { format::format_duration(v, 0.001) })
             .custom_parser(format::parse_seconds),
-    };
-    ui.add(drag);
-    ui.end_row();
+    }
 }
 
 fn value_row(ui: &mut egui::Ui, name: &str, value: &mut f64, unit: &str) {
@@ -539,6 +543,7 @@ fn rules(ui: &mut egui::Ui, workspace: &mut Workspace, tokens: theme::Tokens) ->
         rebuild = true;
     }
     ui.add_space(8.0);
+    let x_input = XInput::of(workspace);
     let mut delete = None;
     let mut any = false;
     for (index, rule) in workspace.rules.iter_mut().enumerate() {
@@ -582,8 +587,21 @@ fn rules(ui: &mut egui::Ui, workspace: &mut Workspace, tokens: theme::Tokens) ->
                     });
                 ui.add_space(4.0);
                 ui.label(RichText::new("Inclusive bounds").size(11.5).color(tokens.text_secondary));
-                for (label, bound) in ["X minimum", "X maximum", "Y minimum", "Y maximum"].into_iter().zip(&mut rule.bounds) {
-                    rebuild |= bound_row(ui, label, bound);
+                // A newly enabled bound starts at the edge of the data it filters.
+                let target = rule.target.clone();
+                let series = &workspace.series;
+                let extent = |slot: usize| {
+                    let (lo, hi) = series.iter()
+                        .filter(|s| target.is_empty() || Some(s.id) == target_id || s.key == target)
+                        .flat_map(|s| if slot < 2 { s.x.iter() } else { s.y.iter() })
+                        .filter(|v| v.is_finite())
+                        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
+                    let value = if slot % 2 == 0 { lo } else { hi };
+                    if value.is_finite() { value } else { 0.0 }
+                };
+                for (slot, (label, bound)) in ["X minimum", "X maximum", "Y minimum", "Y maximum"].into_iter().zip(&mut rule.bounds).enumerate() {
+                    let input = if slot < 2 { x_input } else { XInput::Number };
+                    rebuild |= bound_row(ui, label, bound, || extent(slot), input);
                 }
             });
         });
@@ -594,14 +612,19 @@ fn rules(ui: &mut egui::Ui, workspace: &mut Workspace, tokens: theme::Tokens) ->
     rebuild
 }
 
-fn bound_row(ui: &mut egui::Ui, label: &str, bound: &mut Option<f64>) -> bool {
+fn bound_row(ui: &mut egui::Ui, label: &str, bound: &mut Option<f64>, default: impl FnOnce() -> f64, input: XInput) -> bool {
     let mut enabled = bound.is_some();
-    let mut value = bound.unwrap_or(0.0);
+    let mut value = bound.unwrap_or(f64::NAN);
     let mut changed = false;
     ui.horizontal(|ui| {
-        changed |= ui.checkbox(&mut enabled, label).changed();
+        if ui.checkbox(&mut enabled, label).changed() {
+            changed = true;
+            if enabled {
+                value = default();
+            }
+        }
         if enabled {
-            changed |= ui.add(egui::DragValue::new(&mut value).range(-f64::MAX..=f64::MAX).speed(0.1)).changed();
+            changed |= ui.add(x_drag(&mut value, input)).changed();
         } else {
             ui.label(RichText::new("Any").weak());
         }
