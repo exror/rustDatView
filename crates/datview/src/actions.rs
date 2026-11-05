@@ -98,7 +98,13 @@ pub(crate) struct Shortcut {
 
 impl Shortcut {
     pub(crate) fn text(self, ctx: &egui::Context) -> String {
-        ctx.format_shortcut(&self.keyboard)
+        // egui spells punctuation keys out ("Ctrl+Comma"); menus show the key.
+        let text = ctx.format_shortcut(&self.keyboard);
+        let key = self.keyboard.logical_key;
+        match text.strip_suffix(key.name()) {
+            Some(modifiers) if key.symbol_or_name() != key.name() => format!("{modifiers}{}", key.symbol_or_name()),
+            _ => text,
+        }
     }
 }
 
