@@ -17,13 +17,15 @@ fn main() {
     let numeric = parts
         .into_iter()
         .fold(0u64, |value, part| (value << 16) | part);
+    // Task Manager and Explorer show FileDescription as the program name.
+    // Resource compilers differ in how they read non-ASCII, so keep it ASCII.
     winresource::WindowsResource::new()
         .set_icon("../../assets/brand/rustdatview.ico")
+        .set_language(0x0409)
         .set("ProductName", "rustDatView")
-        .set(
-            "FileDescription",
-            "rustDatView — fast, beautiful data viewer",
-        )
+        .set("FileDescription", "rustDatView")
+        .set("LegalCopyright", "MIT License")
+        .set("OriginalFilename", "rustDatView.exe")
         .set("ProductVersion", version)
         .set("FileVersion", version)
         .set_version_info(winresource::VersionInfo::PRODUCTVERSION, numeric)
