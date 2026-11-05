@@ -890,7 +890,7 @@ impl DatView {
                         {
                             self.workspace.follow = !following;
                         }
-                        if let Some(cursor) = self.cursor.filter(|_| !self.workspace.series.is_empty()) {
+                        if let Some(cursor) = self.cursor.filter(|_| self.view == View::Chart && !self.workspace.series.is_empty()) {
                             let value = ui::chart_view::x_readout(&self.workspace, cursor, self.settings.precision);
                             let label = self.workspace.x_key.as_ref()
                                 .and_then(|key| self.workspace.channels.iter().find(|channel| &channel.key == key))
@@ -1511,7 +1511,15 @@ impl eframe::App for DatView {
             let add = ctx.input(|i| i.modifiers.ctrl || i.modifiers.shift);
             self.open_paths(dropped, add, None);
         }
-        self.fields.sync(&mut self.workspace);
+        // Files that hold 2D fields but no real signals (VTK image data, for
+        // example) open straight in the Fields view.
+        let fields_appeared = self.fields.sync(&mut self.workspace);
+        if fields_appeared
+            && self.view == View::Chart
+            && self.workspace.tables.tabs.iter().all(|table| table.fileobject.is_none() || table.data.nrows() < 3)
+        {
+            self.view = View::Fields;
+        }
         if self.view == View::Fields && !self.fields.available() {
             self.view = View::Chart;
         }

@@ -57,11 +57,14 @@ impl Default for FieldsView {
 }
 
 impl FieldsView {
-    pub(crate) fn sync(&mut self, workspace: &mut Workspace) {
+    /// Collect 2D fields from loaded files. Returns true when fields become
+    /// available where there were none, so the caller can show them.
+    pub(crate) fn sync(&mut self, workspace: &mut Workspace) -> bool {
         if self.revision == Some(workspace.data_revision) {
-            return;
+            return false;
         }
         self.revision = Some(workspace.data_revision);
+        let had_fields = self.available();
         let mut files: Vec<Arc<dyn FileObject>> = Vec::new();
         for table in &workspace.tables.tabs {
             if let Some(file) = &table.fileobject {
@@ -76,7 +79,7 @@ impl FieldsView {
                 .zip(&self.files)
                 .all(|(a, b)| Arc::ptr_eq(a, b))
         {
-            return;
+            return false;
         }
         self.fields.clear();
         for file in &files {
@@ -103,6 +106,7 @@ impl FieldsView {
         self.texture = None;
         self.image = None;
         self.error = None;
+        !had_fields && self.available()
     }
     pub(crate) fn available(&self) -> bool {
         !self.fields.is_empty()
@@ -191,6 +195,7 @@ impl FieldsView {
             return None;
         }
         let mut changed = false;
+        let mut result = None;
         ui.horizontal_wrapped(|ui| {
             ui.label("Field");
             egui::ComboBox::from_id_salt("field-picker")
@@ -263,6 +268,45 @@ impl FieldsView {
                             .changed();
                     });
             }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.menu_button("Export", |ui| {
+                    let field = &self.fields[self.index].1;
+                    let stem: String = field.name.chars()
+                        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+                        .collect();
+                    if ui.button("Matrix as CSV…").clicked() {
+                        ui.close();
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("CSV", &["csv"])
+                            .set_file_name(format!("{stem}.csv"))
+                            .save_file()
+                        {
+                            result = Some(match export_csv(field, &path) {
+                                Ok(()) => format!("Exported {}", path.display()),
+                                Err(e) => format!("Could not export the field matrix: {e}"),
+                            });
+                        }
+                    }
+                    if ui.add_enabled(self.image.is_some(), egui::Button::new("Image as PNG…"))
+                        .on_hover_text("One pixel per cell, in the current color map and range")
+                        .clicked()
+                    {
+                        ui.close();
+                        if let (Some(path), Some(image)) = (
+                            rfd::FileDialog::new()
+                                .add_filter("PNG", &["png"])
+                                .set_file_name(format!("{stem}.png"))
+                                .save_file(),
+                            &self.image,
+                        ) {
+                            result = Some(match export_png(image, &path) {
+                                Ok(()) => format!("Exported {}", path.display()),
+                                Err(e) => format!("Could not export the field image: {e}"),
+                            });
+                        }
+                    }
+                });
+            });
         });
         if changed {
             self.texture = None;
@@ -276,38 +320,9 @@ impl FieldsView {
         }
         if let Some(error) = &self.error {
             ui.colored_label(ui.visuals().error_fg_color, error);
-            return None;
+            return result;
         }
         let field = &self.fields[self.index].1;
-        let mut result = None;
-        ui.horizontal(|ui| {
-            if ui.button("Export matrix CSV…").clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("CSV", &["csv"])
-                    .set_file_name("field.csv")
-                    .save_file()
-                {
-                    result = Some(match export_csv(field, &path) {
-                        Ok(()) => "Field matrix exported".into(),
-                        Err(e) => format!("Could not export field matrix: {e}"),
-                    });
-                }
-            }
-            if ui.button("Export image PNG…").clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("PNG", &["png"])
-                    .set_file_name("field.png")
-                    .save_file()
-                {
-                    if let Some(image) = &self.image {
-                        result = Some(match export_png(image, &path) {
-                            Ok(()) => "Field image exported".into(),
-                            Err(e) => format!("Could not export field image: {e}"),
-                        });
-                    }
-                }
-            }
-        });
         let size = Vec2::new(
             ui.available_width().max(250.0),
             ui.available_height().max(200.0),
@@ -415,18 +430,38 @@ impl FieldsView {
                 nearest(&field.x, x).zip(nearest(&field.y, y))
             };
             if let Some((i, j)) = cell {
-                response.on_hover_text(format!(
-                    "{}: {}\n{}: {}\n{}: {}",
-                    field.sx,
-                    dv_chart::format::format_value(field.x[i], "", 5),
-                    field.sy,
-                    dv_chart::format::format_value(field.y[j], "", 5),
-                    field.name,
-                    dv_chart::format::format_value(field.value(i, j), "", 5)
-                ));
+                let rows = [
+                    (field.sx.as_str(), dv_chart::format::format_value(field.x[i], "", 5)),
+                    (field.sy.as_str(), dv_chart::format::format_value(field.y[j], "", 5)),
+                    (field.name.as_str(), dv_chart::format::format_value(field.value(i, j), "", 5)),
+                ];
+                hover_card(ui, pos, outer, &rows);
             }
         }
         result
+    }
+}
+
+/// A compact value card beside the pointer, matching the chart's hover style.
+fn hover_card(ui: &egui::Ui, pos: Pos2, area: Rect, rows: &[(&str, String)]) {
+    let tokens = super::theme::Tokens::for_dark(super::theme::is_dark(ui.ctx()));
+    let painter = ui.painter();
+    let font = FontId::proportional(12.5);
+    let layout = |text: &str, color: Color32| painter.layout_no_wrap(text.to_owned(), font.clone(), color);
+    let labels: Vec<_> = rows.iter().map(|(label, _)| layout(label, tokens.text_secondary)).collect();
+    let values: Vec<_> = rows.iter().map(|(_, value)| layout(value, tokens.text)).collect();
+    let label_width = labels.iter().map(|g| g.size().x).fold(0.0, f32::max);
+    let value_width = values.iter().map(|g| g.size().x).fold(0.0, f32::max);
+    let line = 19.0;
+    let size = Vec2::new(label_width + value_width + 34.0, rows.len() as f32 * line + 12.0);
+    let x = if pos.x + 16.0 + size.x < area.right() { pos.x + 16.0 } else { pos.x - 16.0 - size.x };
+    let y = (pos.y - size.y * 0.5).clamp(area.top(), (area.bottom() - size.y).max(area.top()));
+    let card = Rect::from_min_size(Pos2::new(x, y), size);
+    painter.rect(card, 7.0, tokens.raised, Stroke::new(1.0, tokens.border_strong), egui::StrokeKind::Inside);
+    for (index, (label, value)) in labels.into_iter().zip(values).enumerate() {
+        let cy = card.top() + 6.0 + line * (index as f32 + 0.5);
+        painter.galley(Pos2::new(card.left() + 10.0, cy - label.size().y * 0.5), label, tokens.text_secondary);
+        painter.galley(Pos2::new(card.right() - 10.0 - value.size().x, cy - value.size().y * 0.5), value, tokens.text);
     }
 }
 
@@ -454,6 +489,8 @@ fn bounds(field: &Field2D, polar: bool) -> [f64; 4] {
             .max(f64::EPSILON);
         [-r, r, -r, r]
     } else {
+        // Each sample is drawn as a cell centred on its coordinate, so the
+        // plotted extent reaches half a cell beyond the first and last sample.
         let expand = |a: &[f64]| {
             let lo = a[0].min(a[a.len() - 1]);
             let hi = a[0].max(a[a.len() - 1]);
@@ -461,7 +498,8 @@ fn bounds(field: &Field2D, polar: bool) -> [f64; 4] {
                 let d = lo.abs().max(1.0) * 0.5;
                 (lo - d, hi + d)
             } else {
-                (lo, hi)
+                let half = (hi - lo) / (a.len() - 1) as f64 * 0.5;
+                (lo - half, hi + half)
             }
         };
         let (x0, x1) = expand(&field.x);
