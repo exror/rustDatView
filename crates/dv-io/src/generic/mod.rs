@@ -55,9 +55,13 @@ impl FileObject for GenericFile {
         }
         let skip = usize::from(df.column(0).name.eq_ignore_ascii_case("index"));
         let columns = &df.columns()[skip..];
-        if !columns
-            .iter()
-            .all(|c| matches!(c.data, ColumnData::Float(_) | ColumnData::DateTime(_)))
+        // Only a matrix of one quantity reads as a 2D field (spectrogram or
+        // map exports); a log of power, clocks and temperatures over time does not.
+        let first_unit = dv_core::common::unit(&columns.first()?.name);
+        if columns.len() < 2
+            || !columns.iter().all(|c| {
+                matches!(c.data, ColumnData::Float(_)) && dv_core::common::unit(&c.name) == first_unit
+            })
         {
             return None;
         }

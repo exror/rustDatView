@@ -604,17 +604,18 @@ mod tests {
     }
 
     #[test]
-    fn csv_fields_are_created_only_on_request_and_remain_format_specific() {
-        let df = super::super::frame(vec![
+    fn csv_fields_are_created_only_for_matrices_and_remain_format_specific() {
+        // A matrix export: every column holds the same quantity.
+        let matrix = super::super::frame(vec![
             Column::float("Index", vec![0.0, 1.0]),
-            Column::datetime("Timestamp", vec![10.0, 11.0]),
-            Column::float("Power", vec![20.0, 21.0]),
+            Column::float("Bin 1 [dB]", vec![10.0, 11.0]),
+            Column::float("Bin 2 [dB]", vec![20.0, 21.0]),
         ])
         .unwrap();
         let file = super::super::object(
-            Path::new("test.csv"),
+            Path::new("matrix.csv"),
             "CSV file",
-            vec![NamedFrame::unnamed(df.clone())],
+            vec![NamedFrame::unnamed(matrix)],
             None,
             String::new(),
         );
@@ -629,6 +630,21 @@ mod tests {
                 m: vec![10.0, 20.0, 11.0, 21.0],
             }]
         );
+        // A log of different quantities over time is not a field.
+        let df = super::super::frame(vec![
+            Column::float("Index", vec![0.0, 1.0]),
+            Column::datetime("Timestamp", vec![10.0, 11.0]),
+            Column::float("Power", vec![20.0, 21.0]),
+        ])
+        .unwrap();
+        let log = super::super::object(
+            Path::new("test.csv"),
+            "CSV file",
+            vec![NamedFrame::unnamed(df.clone())],
+            None,
+            String::new(),
+        );
+        assert!(log.to_2d_fields().is_none());
         let other = super::super::object(
             Path::new("other"),
             "other format",
