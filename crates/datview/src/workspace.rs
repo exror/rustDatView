@@ -844,6 +844,37 @@ impl Workspace {
         changed
     }
 
+    /// Active sources whose X ranges are pairwise disjoint: separate
+    /// recordings (two benchmark runs) rather than simultaneous loggers.
+    /// Returns their indices when there are at least two and none is aligned.
+    pub(crate) fn separate_recordings(&self) -> Option<Vec<usize>> {
+        let key = self.x_key.as_deref()?;
+        let mut spans = Vec::new();
+        for (index, (source, table)) in self.sources.iter().zip(&self.tables.tabs).enumerate() {
+            if !source.active {
+                continue;
+            }
+            if source.align_start || source.offset != 0.0 {
+                return None;
+            }
+            let column = table.data.columns().iter().find(|column| clean_col(&column.name) == key)?;
+            let values = match &column.data {
+                ColumnData::Float(values) | ColumnData::DateTime(values) => values,
+                ColumnData::Str(_) => return None,
+            };
+            let (lo, hi) = values.iter().filter(|v| v.is_finite()).fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+            if lo >= hi {
+                return None;
+            }
+            spans.push((index, lo, hi));
+        }
+        if spans.len() < 2 {
+            return None;
+        }
+        spans.sort_by(|a, b| a.1.total_cmp(&b.1));
+        spans.windows(2).all(|pair| pair[0].2 < pair[1].1).then(|| spans.iter().map(|span| span.0).collect())
+    }
+
     /// Merge active sources on the selected X axis. Numeric channels are
     /// interpolated; text channels hold their most recent value within a run.
     pub(crate) fn merge_sources(&mut self) -> Result<(), String> {
@@ -1251,6 +1282,61 @@ impl Workspace {
             self.enqueue(LoadKind::Replay, files);
         }
     }
+
+    /// Short labels telling the active sources apart, indexed like `sources`.
+    /// Inactive sources keep their file name.
+    pub(crate) fn source_tags(&self) -> Vec<String> {
+        let active: Vec<&str> = self.sources.iter()
+            .filter(|source| source.active)
+            .map(|source| source.name.as_str())
+            .collect();
+        let mut tags = distinguishing_names(&active).into_iter();
+        self.sources.iter()
+            .map(|source| if source.active { tags.next().unwrap_or_default() } else { source.name.clone() })
+            .collect()
+    }
+}
+
+/// The parts of file names that differ: `cpu-benchmark-eco.csv` and
+/// `cpu-benchmark-performance.csv` become `eco` and `performance`. Common
+/// prefixes and suffixes are only cut at separators so words stay whole;
+/// names that would become empty or identical are kept in full.
+pub(crate) fn distinguishing_names(names: &[&str]) -> Vec<String> {
+    let stems: Vec<&str> = names.iter()
+        .map(|name| Path::new(name).file_stem().and_then(|stem| stem.to_str()).unwrap_or(name))
+        .collect();
+    if stems.len() < 2 {
+        return stems.iter().map(|stem| (*stem).to_owned()).collect();
+    }
+    let separator = |c: char| matches!(c, '-' | '_' | ' ' | '.' | '·' | '(' | ')' | '[' | ']');
+    let first = stems[0];
+    // Longest common prefix, in bytes on char boundaries.
+    let mut prefix = first.len();
+    let mut suffix = first.len();
+    for stem in &stems[1..] {
+        prefix = prefix.min(first.char_indices().zip(stem.chars())
+            .find(|((_, a), b)| a != b)
+            .map_or(first.len().min(stem.len()), |((index, _), _)| index));
+        suffix = suffix.min(first.chars().rev().zip(stem.chars().rev())
+            .take_while(|(a, b)| a == b)
+            .map(|(a, _)| a.len_utf8())
+            .sum());
+    }
+    // Back off to the last separator inside the shared part.
+    let prefix = first[..prefix].rfind(separator).map_or(0, |index| index + 1);
+    let suffix = first[first.len() - suffix..].find(separator).map_or(0, |index| suffix - index);
+    let tags: Vec<String> = stems.iter()
+        .map(|stem| {
+            let end = stem.len().saturating_sub(suffix).max(prefix.min(stem.len()));
+            stem.get(prefix.min(stem.len())..end).unwrap_or(stem).trim_matches(separator).to_owned()
+        })
+        .collect();
+    let unique = tags.iter().collect::<std::collections::HashSet<_>>().len() == tags.len();
+    if unique && tags.iter().all(|tag| !tag.is_empty()) {
+        tags
+    } else {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
 }
 fn table_actions_key(pipeline: &Pipeline) -> String {
     let actions: Vec<_> = pipeline
@@ -1264,6 +1350,23 @@ fn table_actions_key(pipeline: &Pipeline) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn distinguishing_names_keep_whole_words() {
+        assert_eq!(
+            distinguishing_names(&["cpu-benchmark-eco.csv", "cpu-benchmark-performance.csv"]),
+            ["eco", "performance"]
+        );
+        assert_eq!(distinguishing_names(&["hwinfo_run1.csv", "hwinfo_run2.csv"]), ["run1", "run2"]);
+        assert_eq!(
+            distinguishing_names(&["log 12-40 cpu.csv", "log 13-10 cpu.csv"]),
+            ["12-40", "13-10"]
+        );
+        // Identical stems (same file name in two formats) stay whole.
+        assert_eq!(distinguishing_names(&["run.csv", "run.hml"]), ["run.csv", "run.hml"]);
+        assert_eq!(distinguishing_names(&["power.csv", "power-2.csv"]), ["power", "power-2"]);
+        assert_eq!(distinguishing_names(&["only.csv"]), ["only"]);
+    }
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
 

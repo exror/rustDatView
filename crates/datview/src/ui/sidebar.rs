@@ -394,7 +394,10 @@ impl Sidebar {
                         source_action = Some(SourceAction::Sort);
                         ui.close();
                     }
-                    if ui.add_enabled(active_sources > 1, egui::Button::new("Align all starts")).clicked() {
+                    if ui.add_enabled(active_sources > 1, egui::Button::new("Align all starts"))
+                        .on_hover_text("Start every selected source at zero and clear offsets")
+                        .clicked()
+                    {
                         source_action = Some(SourceAction::AlignAll);
                         ui.close();
                     }
@@ -416,12 +419,19 @@ impl Sidebar {
                 }).response.on_hover_text("Source actions");
             });
         });
-        if active_sources > 1 && ui.small_button("Align all starts").on_hover_text("Align each selected source's first X value to zero and clear offsets").clicked() {
-            source_action = Some(SourceAction::AlignAll);
-        }
+        // Offsets are in X axis units; timestamps shift in seconds.
+        let offset_unit = match crate::ui::chart_view::x_axis_format(workspace).0 {
+            dv_chart::AxisFormat::DateTime | dv_chart::AxisFormat::Duration => "s".to_owned(),
+            _ => workspace.x_key.as_ref()
+                .and_then(|key| workspace.channels.iter().find(|channel| &channel.key == key))
+                .map(|channel| channel.unit.clone())
+                .unwrap_or_default(),
+        };
+        let offset_suffix = if offset_unit.is_empty() { String::new() } else { format!(" {offset_unit}") };
         let mut rename_commit = None;
         let mut rename_cancel = false;
-        egui::ScrollArea::vertical().id_salt("sources-list").max_height(235.0).show(ui, |ui| {
+        let list_height = (ui.available_height() * 0.4).max(150.0);
+        egui::ScrollArea::vertical().id_salt("sources-list").max_height(list_height).show(ui, |ui| {
             for (index, source) in workspace.sources.iter_mut().enumerate() {
                 let Some(table) = workspace.tables.tabs.get(index) else { continue };
                 let key = source.stable_key();
@@ -553,8 +563,8 @@ impl Sidebar {
                                 output.changed |= ui.checkbox(&mut source.align_start, "Start at 0")
                                     .on_hover_text("Align the first X value to zero").changed();
                                 ui.label(egui::RichText::new("Offset").size(11.0).color(tokens.text_secondary));
-                                output.changed |= ui.add(egui::DragValue::new(&mut source.offset).speed(0.1).max_decimals(6))
-                                    .on_hover_text("Offset in the X axis unit").changed();
+                                output.changed |= ui.add(egui::DragValue::new(&mut source.offset).speed(0.1).max_decimals(6).suffix(offset_suffix.as_str()))
+                                    .on_hover_text("Shift this source along X").changed();
                             });
                         }
                     });

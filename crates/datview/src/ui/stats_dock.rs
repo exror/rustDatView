@@ -442,14 +442,11 @@ impl StatsDock {
             );
         }
         let slot = scope_index(scope);
+        let tags = workspace.source_tags();
         let all_rows: Vec<_> = workspace.series.iter()
             .filter_map(|series| {
                 let cached = self.cache.get(&series.id)?.get(slot)?.as_ref()?;
-                let source = workspace
-                    .sources
-                    .get(series.source)
-                    .map(|source| source.name.as_str())
-                    .unwrap_or("");
+                let source = tags.get(series.source).map_or("", String::as_str);
                 let datetime = series.datetime;
                 let x_seconds = if workspace.mode == Mode::Signals
                     && cached.x_unit.family == UnitFamily::Time
@@ -1191,7 +1188,7 @@ fn unit_ratio(y: &str, x: &str) -> String {
 }
 fn series_label(row: &Row<'_>, multiple_sources: bool) -> String {
     if multiple_sources && !row.source.is_empty() {
-        format!("{} · {}", row.source, row.series.channel_label)
+        format!("{} · {}", row.series.channel_label, row.source)
     } else {
         row.series.channel_label.clone()
     }

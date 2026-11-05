@@ -49,6 +49,21 @@ struct Toast {
     message: String,
     error: bool,
     created: Instant,
+    action: Option<ToastAction>,
+}
+
+/// A follow-up offered by a notification, e.g. undoing an automatic change.
+enum ToastAction {
+    /// Return these sources (by stable key) to absolute time.
+    UndoAlign(Vec<String>),
+}
+
+impl ToastAction {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::UndoAlign(_) => "Undo",
+        }
+    }
 }
 
 struct SessionOverrides {
@@ -95,6 +110,9 @@ pub(crate) struct DatView {
     last_title: String,
     seen_problems: usize,
     toasts: Vec<Toast>,
+    /// Source count at the last automatic-alignment check; `usize::MAX`
+    /// suppresses the check for the load in progress (sessions keep their own).
+    checked_sources: usize,
     formula: ui::dialogs::formula::FormulaDialog,
     analysis: ui::dialogs::analysis::AnalysisWindow,
     processing: ui::dialogs::pipeline::PipelineDialog,
@@ -193,6 +211,7 @@ impl DatView {
             last_title: String::new(),
             seen_problems: 0,
             toasts: Vec::new(),
+            checked_sources: 0,
             formula: Default::default(),
             analysis: Default::default(),
             processing: Default::default(),
@@ -230,7 +249,45 @@ impl DatView {
             message: message.into(),
             error,
             created: Instant::now(),
+            action: None,
         });
+    }
+
+    /// Separate recordings opened together are compared from their starts.
+    /// Overlapping recordings (simultaneous loggers) keep absolute time.
+    fn align_separate_recordings(&mut self) {
+        let Some(indices) = self.workspace.separate_recordings() else { return };
+        let mut keys = Vec::with_capacity(indices.len());
+        for index in indices {
+            let source = &mut self.workspace.sources[index];
+            source.align_start = true;
+            keys.push(source.stable_key());
+        }
+        let count = keys.len();
+        self.chart.fit_all();
+        self.chart.selection = None;
+        self.workspace.rebuild();
+        self.toasts.push(Toast {
+            message: format!("{count} separate recordings aligned at their start"),
+            error: false,
+            created: Instant::now(),
+            action: Some(ToastAction::UndoAlign(keys)),
+        });
+    }
+
+    fn run_toast_action(&mut self, action: ToastAction) {
+        match action {
+            ToastAction::UndoAlign(keys) => {
+                for source in &mut self.workspace.sources {
+                    if keys.contains(&source.stable_key()) {
+                        source.align_start = false;
+                    }
+                }
+                self.chart.fit_all();
+                self.chart.selection = None;
+                self.workspace.rebuild();
+            }
+        }
     }
 
     fn remember(list: &mut Vec<PathBuf>, path: PathBuf) {
@@ -276,6 +333,7 @@ impl DatView {
     }
 
     fn open_session(&mut self, path: PathBuf) {
+        self.checked_sources = usize::MAX;
         match Session::load(&path).and_then(|session| session.begin(&mut self.workspace)) {
             Ok(restore) => {
                 Self::remember(&mut self.settings.recent_sessions, path.clone());
@@ -487,6 +545,13 @@ impl DatView {
             }
             ctx.request_repaint();
         }
+        let source_count = self.workspace.sources.len();
+        if self.workspace.loading.is_none() && self.restore.as_ref().is_none_or(|restore| !restore.is_pending()) {
+            if source_count > self.checked_sources {
+                self.align_separate_recordings();
+            }
+            self.checked_sources = source_count;
+        }
         if let Some(restore) = &mut self.restore {
             if let Some(view) = restore.finish(&mut self.workspace) {
                 self.chart = view.chart;
@@ -552,17 +617,19 @@ impl DatView {
             self.notify(error, true);
         }
         self.seen_problems = self.workspace.problems.len();
-        self.toasts
-            .retain(|toast| toast.error || toast.created.elapsed() < Duration::from_secs(4));
+        // Notifications offering an action stay long enough to use it.
+        self.toasts.retain(|toast| {
+            let lifetime = if toast.action.is_some() { 10 } else { 4 };
+            toast.error || toast.created.elapsed() < Duration::from_secs(lifetime)
+        });
         if self.toasts.iter().any(|toast| !toast.error) {
             ctx.request_repaint_after(Duration::from_millis(300));
         }
-        let title = self
-            .workspace
-            .sources
-            .first()
-            .map(|source| format!("{} — rustDatView", source.name))
-            .unwrap_or_else(|| "rustDatView".into());
+        let title = match self.workspace.sources.as_slice() {
+            [] => "rustDatView".to_owned(),
+            [source] => format!("{} — rustDatView", source.name),
+            [source, rest @ ..] => format!("{} + {} more — rustDatView", source.name, rest.len()),
+        };
         if title != self.last_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.last_title = title;
@@ -823,28 +890,15 @@ impl DatView {
                         {
                             self.workspace.follow = !following;
                         }
-                        if let Some(cursor) = self.cursor {
-                            let text = match self.workspace.series.first() {
-                                Some(series) if series.datetime => {
-                                    dv_chart::format::format_time(cursor, 0.001)
-                                }
-                                Some(series) => {
-                                    let (label, mut unit) =
-                                        dv_core::units::split_name_unit(&series.x_label);
-                                    if unit.is_empty() && self.workspace.mode == Mode::Signals {
-                                        if let Some(channel) = self.workspace.channels.iter().find(|c| {
-                                            Some(&c.key) == self.workspace.x_key.as_ref()
-                                        }) {
-                                            unit.clone_from(&channel.unit);
-                                        }
-                                    }
-                                    let label = if label.is_empty() { "X" } else { &label };
-                                    format!(
-                                        "{label} = {}",
-                                        dv_chart::format::format_value(cursor, &unit, self.settings.precision)
-                                    )
-                                }
-                                None => String::new(),
+                        if let Some(cursor) = self.cursor.filter(|_| !self.workspace.series.is_empty()) {
+                            let value = ui::chart_view::x_readout(&self.workspace, cursor, self.settings.precision);
+                            let label = self.workspace.x_key.as_ref()
+                                .and_then(|key| self.workspace.channels.iter().find(|channel| &channel.key == key))
+                                .map(|channel| channel.label.as_str())
+                                .filter(|label| !label.is_empty() && self.workspace.mode == Mode::Signals);
+                            let text = match label {
+                                Some(label) => format!("{label} = {value}"),
+                                None => value,
                             };
                             ui.label(RichText::new(text).size(11.5).color(tokens.text_secondary));
                         }
@@ -1389,6 +1443,7 @@ impl DatView {
         }
         let tokens = theme::Tokens::for_dark(theme::is_dark(ctx));
         let mut dismissed = None;
+        let mut acted = None;
         egui::Area::new(root.make_persistent_id("notifications"))
             .anchor(egui::Align2::RIGHT_BOTTOM, [-18.0, -44.0])
             .show(ctx, |ui| {
@@ -1407,11 +1462,17 @@ impl DatView {
                                         .size(16.0)
                                         .color(if toast.error { tokens.error } else { tokens.success }),
                                 );
+                                let text_width = if toast.action.is_some() { 220.0 } else { 280.0 };
                                 ui.allocate_ui_with_layout(
-                                    egui::vec2(280.0, 0.0),
+                                    egui::vec2(text_width, 0.0),
                                     Layout::top_down(Align::Min),
                                     |ui| { ui.add(egui::Label::new(&toast.message).wrap()); },
                                 );
+                                if let Some(action) = &toast.action {
+                                    if ui.button(RichText::new(action.label()).color(tokens.accent)).clicked() {
+                                        acted = Some(index);
+                                    }
+                                }
                                 if widgets::icon_button(ui, icons::CLOSE, "Dismiss notification").clicked() {
                                     dismissed = Some(index);
                                 }
@@ -1420,7 +1481,11 @@ impl DatView {
                     ui.add_space(5.0);
                 }
             });
-        if let Some(index) = dismissed {
+        if let Some(index) = acted {
+            if let Some(action) = self.toasts.remove(index).action {
+                self.run_toast_action(action);
+            }
+        } else if let Some(index) = dismissed {
             self.toasts.remove(index);
         }
     }
@@ -1432,7 +1497,6 @@ impl eframe::App for DatView {
     }
 
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let perf_start = Instant::now();
         let ctx = root.ctx().clone();
         self.update_loading(&ctx);
         let dropped = ctx.input(|i| {
@@ -1500,10 +1564,11 @@ impl eframe::App for DatView {
         }
         if has_sources && self.stats_visible && self.view == View::Chart {
             let tokens = theme::Tokens::for_dark(theme::is_dark(&ctx));
+            // Room for a toolbar, a header and about six rows; never fewer than three.
             egui::Panel::bottom("stats")
                 .resizable(true)
-                .default_size(205.0)
-                .min_size(90.0)
+                .default_size(220.0)
+                .min_size(170.0)
                 .frame(
                     egui::Frame::new()
                         .fill(tokens.panel_bg)
@@ -1623,13 +1688,6 @@ impl eframe::App for DatView {
             None => {}
         }
         self.toast_overlay(root, &ctx);
-        if let Ok(path) = std::env::var("DV_PROFILE") {
-            use std::io::Write as _;
-            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-                let row = format!("frame\t{:.3}\t{}\t{}\t{}\n", perf_start.elapsed().as_secs_f64() * 1000.0, self.workspace.series.len(), self.workspace.loading.is_some(), self.cursor.is_some());
-                let _ = file.write_all(row.as_bytes());
-            }
-        }
     }
 }
 

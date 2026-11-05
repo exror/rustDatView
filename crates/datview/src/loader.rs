@@ -113,20 +113,12 @@ impl Loader {
                             break;
                         }
                         let file_stamp = stamp(&request.path);
-                        let perf_start = std::time::Instant::now();
                         let (mut loaded, warning) = tables.load_file_tabs(
                             &request.path,
                             request.format.as_deref(),
                             false,
                             &reader,
                         );
-                        if let Ok(path) = std::env::var("DV_PROFILE") {
-                            use std::io::Write as _;
-                            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-                                let row = format!("load\t{:.3}\t{}\n", perf_start.elapsed().as_secs_f64() * 1000.0, request.path.display());
-                                let _ = file.write_all(row.as_bytes());
-                            }
-                        }
                         let mut messages = Vec::new();
                         if !warning.trim().is_empty() {
                             messages.push(warning.trim().to_owned());

@@ -608,44 +608,15 @@ pub(crate) fn with_chart<R>(
         }
         _ => shared_x_label.or(x_name.as_deref()).unwrap_or(""),
     };
-    let datetime = workspace
-        .series
-        .first()
-        .is_some_and(|series| series.datetime);
-    let aligned_datetime = matches!(workspace.mode, Mode::Signals)
-        && workspace.series.first().is_some_and(|series| {
-            workspace
-                .sources
-                .get(series.source)
-                .is_some_and(|source| source.align_start)
-                && workspace
-                    .tables
-                    .tabs
-                    .get(series.source)
-                    .is_some_and(|table| {
-                        workspace.x_key.as_ref().is_some_and(|key| {
-                            table.data.columns().iter().any(|column| {
-                                column.is_datetime()
-                                    && dv_core::common::clean_col(&column.name) == *key
-                            })
-                        })
-                    })
-        });
-    let duration = matches!(workspace.mode, Mode::Signals)
-        && (aligned_datetime || x_channel.is_some_and(|channel| channel.unit == "s"));
+    let (x_format, aligned_datetime) = x_axis_format(workspace);
+    let datetime = x_format == AxisFormat::DateTime;
+    let duration = x_format == AxisFormat::Duration;
     let x_label = if !options.x_label.is_empty() {
         options.x_label.as_str()
     } else if aligned_datetime {
-        "Elapsed time [s]"
+        "Elapsed time"
     } else {
         default_x_label
-    };
-    let x_format = if datetime {
-        AxisFormat::DateTime
-    } else if duration {
-        AxisFormat::Duration
-    } else {
-        AxisFormat::Number
     };
     let overview = settings.overview
         && (datetime || duration)
@@ -764,4 +735,48 @@ pub(crate) fn with_chart<R>(
         }
     }
     render(&panes, &config, &marks, &chart_theme)
+}
+
+/// How the X axis is labelled: clock time, elapsed duration or plain numbers.
+/// The second value is true when absolute timestamps were aligned to elapsed time.
+pub(crate) fn x_axis_format(workspace: &Workspace) -> (AxisFormat, bool) {
+    let first = workspace.series.first();
+    if first.is_some_and(|series| series.datetime) {
+        return (AxisFormat::DateTime, false);
+    }
+    if workspace.mode != Mode::Signals {
+        return (AxisFormat::Number, false);
+    }
+    let aligned_datetime = first.is_some_and(|series| {
+        workspace.sources.get(series.source).is_some_and(|source| source.align_start)
+            && workspace.tables.tabs.get(series.source).is_some_and(|table| {
+                workspace.x_key.as_ref().is_some_and(|key| {
+                    table.data.columns().iter().any(|column| {
+                        column.is_datetime() && dv_core::common::clean_col(&column.name) == *key
+                    })
+                })
+            })
+    });
+    let seconds = workspace.x_key.as_ref().is_some_and(|key| {
+        workspace.channels.iter().any(|channel| &channel.key == key && channel.unit == "s")
+    });
+    if aligned_datetime || seconds {
+        (AxisFormat::Duration, aligned_datetime)
+    } else {
+        (AxisFormat::Number, false)
+    }
+}
+
+/// The X position under the cursor, written the way the X axis writes it.
+pub(crate) fn x_readout(workspace: &Workspace, x: f64, precision: usize) -> String {
+    match x_axis_format(workspace).0 {
+        AxisFormat::DateTime => dv_chart::format::format_time(x, 0.001),
+        AxisFormat::Duration => dv_chart::format::format_duration(x, 0.001),
+        _ => {
+            let unit = workspace.x_key.as_ref()
+                .and_then(|key| workspace.channels.iter().find(|channel| &channel.key == key))
+                .map_or("", |channel| channel.unit.as_str());
+            dv_chart::format::format_value(x, unit, precision)
+        }
+    }
 }

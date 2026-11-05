@@ -222,6 +222,9 @@ pub(crate) struct PaneLayout {
     pub legend: Vec<LegendBox>,
     pub actions: Vec<ActionBox>,
     legend_rect: Option<Rect>,
+    /// "+N more" chip when the legend has more entries than fit; hovering the
+    /// pane then lists every value in a floating card.
+    legend_more: Option<(Rect, usize)>,
 }
 pub(crate) struct Layout {
     pub rect: Rect,
@@ -331,17 +334,19 @@ fn pane_heading(pane: &Pane<'_>) -> String {
     }
 }
 /// Lay out the pane heading and legend as a header strip above the plot area,
-/// so legend entries never sit on top of data. `rect` is the whole pane.
+/// so legend entries never sit on top of data. `rect` is the whole pane. The
+/// strip is limited to a few rows; entries that do not fit are summarized by
+/// a "+N more" chip.
 fn legend_layout(
     canvas: &mut dyn Canvas,
     pane: &Pane<'_>,
     rect: Rect,
     config: &ChartConfig<'_>,
     theme: &ChartTheme,
-) -> (Vec<LegendBox>, Option<Rect>) {
+) -> (Vec<LegendBox>, Option<Rect>, Option<(Rect, usize)>) {
     let heading = pane_heading(pane);
     if !config.legend && heading.is_empty() {
-        return (Vec::new(), None);
+        return (Vec::new(), None, None);
     }
     let size = theme.font_size;
     let left = rect.left() + 2.0;
@@ -351,12 +356,17 @@ fn legend_layout(
     } else {
         canvas.measure_text(&heading, size - 1.0, true).x + 16.0
     };
+    let row = size + 9.0;
+    let max_rows = if rect.height() > 300.0 { 3 } else if rect.height() > 150.0 { 2 } else { 1 };
+    let more_width = canvas.measure_text("+888 more", size, false).x + 14.0;
     let mut x = left + title;
     let mut y = top;
-    let row = size + 9.0;
+    let mut rows = 1;
     let mut right: f32 = left + title;
     let mut items = Vec::with_capacity(pane.series.len());
-    for series in pane.series.iter().filter(|_| config.legend) {
+    let mut more = None;
+    let entries: Vec<_> = pane.series.iter().filter(|_| config.legend).collect();
+    for (index, series) in entries.iter().enumerate() {
         let width = 17.0
             + canvas.measure_text(series.label, size, false).x
             + if config.legend_values && !series.overlay {
@@ -365,9 +375,19 @@ fn legend_layout(
                 10.0
             };
         let width = width.min((rect.width() - 20.0).max(24.0));
-        if x > left + title && x + width > rect.right() - 4.0 {
+        let last_row = rows == max_rows;
+        let remaining = entries.len() - index;
+        // On the last row keep room for the overflow chip unless this is the final entry.
+        let reserve = if last_row && remaining > 1 { more_width + 4.0 } else { 0.0 };
+        if x > left + title && x + width + reserve > rect.right() - 4.0 {
+            if last_row {
+                more = Some((Rect::from_min_size(Pos2::new(x, y), Vec2::new(more_width, row)), remaining));
+                right = right.max(x + more_width);
+                break;
+            }
             x = left + title;
             y += row;
+            rows += 1;
         }
         let r = Rect::from_min_size(Pos2::new(x, y), Vec2::new(width, row));
         items.push(LegendBox {
@@ -381,7 +401,7 @@ fn legend_layout(
         Pos2::new(left, top),
         Pos2::new(right.min(rect.right()), y + row),
     );
-    (items, Some(header))
+    (items, Some(header), more)
 }
 fn pane_actions(rect: Rect, id: PaneId) -> Vec<ActionBox> {
     if rect.width() < 320.0 || rect.height() < 60.0 {
@@ -632,7 +652,7 @@ fn layout(
         } else {
             pane_rect
         };
-        let (legend, legend_rect) = legend_layout(canvas, pane, legend_area, config, theme);
+        let (legend, legend_rect, legend_more) = legend_layout(canvas, pane, legend_area, config, theme);
         let header = legend_rect.map_or(0.0, |r| (r.bottom() - pane_rect.top() + 3.0).min(h * 0.5));
         let plot = Rect::from_min_max(Pos2::new(left, y_top + header), Pos2::new(right, y_top + h));
         if config.equal_aspect && x.scale == Scale::Linear && y.scale == Scale::Linear {
@@ -677,6 +697,7 @@ fn layout(
             legend,
             actions,
             legend_rect,
+            legend_more,
         });
         y_top += h;
         if i + 1 < prepared_len {
@@ -1188,6 +1209,10 @@ fn draw(
                     }
                 }
             }
+            if let Some((chip, count)) = pl.legend_more {
+                canvas.fill_rect(chip.shrink2(Vec2::new(0.0, 2.0)), 6.0, theme.legend_bg);
+                canvas.text(chip.center(), Anchor::CenterCenter, &format!("+{count} more"), theme.font_size - 0.5, theme.text_muted, false);
+            }
         }
         let pane_area = pl
             .legend_rect
@@ -1384,6 +1409,42 @@ fn draw(
         }
         canvas.set_clip(None);
     }
+    // With a truncated legend, hovering a pane lists every value of that pane.
+    // Drawn after all panes so neighbouring panes cannot paint over it.
+    for pl in &layout.panes {
+        let Some(pane) = panes.iter().find(|p| p.id == pl.id) else { continue };
+        if let (Some(_), Some(hover), Some(pos)) = (pl.legend_more, hover, pointer.filter(|p| pl.plot.contains(*p))) {
+            let rows: Vec<(&Series<'_>, f64)> = pane.series.iter()
+                .filter(|s| s.visible && !s.overlay && !state.hidden.contains(&s.id))
+                .filter_map(|s| hover.values.iter().find(|(id, _, _, _)| *id == s.id).map(|(_, _, _, v)| (s, *v)))
+                .collect();
+            if !rows.is_empty() {
+                let size = theme.font_size;
+                let line = size + 6.0;
+                let shown = rows.len().min(((layout.rect.height() - 24.0) / line).max(1.0) as usize);
+                let texts: Vec<(String, String)> = rows.iter().take(shown)
+                    .map(|(s, v)| (s.label.to_owned(), format::format_value(*v, s.unit, config.precision)))
+                    .collect();
+                let label_width = texts.iter().map(|(l, _)| canvas.measure_text(l, size, false).x).fold(0.0_f32, f32::max);
+                let value_width = texts.iter().map(|(_, v)| canvas.measure_text(v, size, true).x).fold(0.0_f32, f32::max);
+                let width = 36.0 + label_width + value_width;
+                let height = shown as f32 * line + 12.0;
+                let x = if pos.x + 18.0 + width < layout.rect.right() { pos.x + 18.0 } else { pos.x - 18.0 - width };
+                let y = (pos.y - height * 0.5).clamp(layout.rect.top() + 4.0, (layout.rect.bottom() - height - 4.0).max(layout.rect.top()));
+                let card = Rect::from_min_size(Pos2::new(x, y), Vec2::new(width, height));
+                // Opaque, outlined card: values must stay readable over dense traces.
+                canvas.fill_rect(card.expand(1.0), 8.0, theme.axis_line);
+                canvas.fill_rect(card, 7.0, theme.surface.to_opaque());
+                canvas.fill_rect(card, 7.0, theme.legend_bg);
+                for (i, ((series, _), (label, value))) in rows.iter().zip(&texts).enumerate() {
+                    let cy = card.top() + 6.0 + line * (i as f32 + 0.5);
+                    canvas.circle(Pos2::new(card.left() + 11.0, cy), 3.4, series.color, Stroke::NONE);
+                    canvas.text(Pos2::new(card.left() + 20.0, cy), Anchor::LeftCenter, label, size, theme.text, false);
+                    canvas.text(Pos2::new(card.right() - 8.0, cy), Anchor::RightCenter, value, size, series.color, true);
+                }
+            }
+        }
+    }
     if config.tooltip {
         if let (Some(h), Some(pos)) = (hover, pointer) {
             let x_value = x_readout(h.x, config);
@@ -1501,6 +1562,14 @@ fn hover_at(
                 .get(&series.id)
                 .is_some_and(|c| c.sorted);
             let index = if sorted {
+                // Outside a series' recorded span there is no value to read:
+                // another run may cover this time, this one does not.
+                let span = (pl.x.range[1] - pl.x.range[0]).abs();
+                let first = xs.iter().copied().find(|v| v.is_finite());
+                let last = xs.iter().rev().copied().find(|v| v.is_finite());
+                if first.zip(last).is_none_or(|(a, b)| x < a - span * 0.005 || x > b + span * 0.005) {
+                    continue;
+                }
                 let i = xs.partition_point(|v| *v < x);
                 if i == 0 {
                     0
@@ -1541,7 +1610,6 @@ pub(crate) fn show(
     marks: &[Mark],
     theme: &ChartTheme,
 ) -> ChartResponse {
-    let perf_start = std::time::Instant::now();
     let available = ui.available_size_before_wrap();
     let (rect, response) = ui.allocate_exact_size(
         Vec2::new(available.x.max(80.0), available.y.max(80.0)),
@@ -1566,13 +1634,6 @@ pub(crate) fn show(
         hover.as_ref(),
         pointer,
     );
-    if let Ok(path) = std::env::var("DV_PROFILE") {
-        use std::io::Write as _;
-        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-            let row = format!("chart\t{:.3}\t{}\t{}\n", perf_start.elapsed().as_secs_f64() * 1000.0, panes.iter().map(|pane| pane.series.len()).sum::<usize>(), hover.is_some());
-            let _ = file.write_all(row.as_bytes());
-        }
-    }
     ChartResponse {
         hover,
         clicked: events.clicked,

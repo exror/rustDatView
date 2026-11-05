@@ -214,8 +214,10 @@ fn finish(
         .unwrap_or_else(|| parse_unit(&unit).family.to_string());
     if workspace.sources.iter().filter(|s| s.active).count() > 1 && workspace.mode != Mode::Compare
     {
-        label.push_str(" · ");
-        label.push_str(&workspace.sources[source_index].name);
+        if let Some(tag) = workspace.source_tags().get(source_index) {
+            label.push_str(" · ");
+            label.push_str(tag);
+        }
     }
     SeriesData {
         id,
@@ -260,7 +262,6 @@ impl Workspace {
         if self.series_signature.as_deref() == Some(&signature) {
             return;
         }
-        let perf_start = std::time::Instant::now();
         self.generation = self.generation.wrapping_add(1);
         let mut old: HashMap<_, _> = std::mem::take(&mut self.series)
             .into_iter()
@@ -479,13 +480,6 @@ impl Workspace {
         self.series = series;
         self.item_signatures = item_signatures;
         self.series_signature = Some(full_signature(self, &pipeline));
-        if let Ok(path) = std::env::var("DV_PROFILE") {
-            use std::io::Write as _;
-            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-                let row = format!("series\t{:.3}\t{}\n", perf_start.elapsed().as_secs_f64() * 1000.0, self.series.len());
-                let _ = file.write_all(row.as_bytes());
-            }
-        }
     }
 }
 
