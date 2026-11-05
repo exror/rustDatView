@@ -344,6 +344,18 @@ fn label_ticks(
     } else {
         usize::MAX
     };
+    // Across two or three decades, label the 2× and 5× ticks too (or only
+    // the 5× ticks when space is tighter) so the axis is not left with just
+    // two numbers.
+    let mantissas: &[f64] = if !logarithmic || major_count < 2 {
+        &[]
+    } else if major_count * 3 <= target + 1 {
+        &[2.0, 5.0]
+    } else if major_count * 2 <= target + 1 {
+        &[5.0]
+    } else {
+        &[]
+    };
     let precision = if logarithmic {
         4
     } else {
@@ -366,6 +378,9 @@ fn label_ticks(
         .map(|(value, major)| {
             let show_label = if major {
                 true
+            } else if !mantissas.is_empty() {
+                let mantissa = value / log_value(value.log10().floor() as i32, 1);
+                mantissas.iter().any(|m| (mantissa - m).abs() < 1e-9 * m)
             } else {
                 let selected = minor_index % minor_stride == 0;
                 minor_index += 1;

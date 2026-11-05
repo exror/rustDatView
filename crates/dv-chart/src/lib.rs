@@ -82,6 +82,7 @@ pub struct Pane<'a> {
     pub weight: f32,
 }
 
+#[derive(Clone)]
 pub struct ChartConfig<'a> {
     pub x_label: &'a str,
     pub x_scale: Scale,

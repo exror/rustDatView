@@ -198,11 +198,17 @@ impl SvgCanvas {
                 size * 0.9,
             );
         };
-        let scaled = font.as_scaled(PxScale::from(size));
+        // SVG `font-size` is the em size; ab_glyph's `PxScale` is the
+        // ascent-to-descent height, which is larger than the em for most
+        // fonts. Convert, or every measured width comes out too narrow.
+        let em_scale = |font: &FontArc| {
+            PxScale::from(size * font.height_unscaled() / font.units_per_em().unwrap_or(1000.0))
+        };
+        let scaled = font.as_scaled(em_scale(font));
         let fallback = self
             .mono
             .as_ref()
-            .map(|font| font.as_scaled(PxScale::from(size)));
+            .map(|font| font.as_scaled(em_scale(font)));
         let mut width = 0.0;
         let mut previous = None;
         for c in text.chars() {

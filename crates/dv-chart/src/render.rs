@@ -1653,6 +1653,8 @@ pub(crate) fn svg(
     size: [f32; 2],
 ) -> String {
     let size = [size[0].max(1.0), size[1].max(1.0)];
+    // The overview strip is a navigation control, not part of a figure.
+    let config = &ChartConfig { overview: false, ..config.clone() };
     let mut canvas = SvgCanvas::new(size, fonts);
     let mut state = state.clone();
     let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(size[0], size[1]));

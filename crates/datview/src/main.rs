@@ -46,7 +46,29 @@ fn arguments() -> Result<Option<Launch>, String> {
                     .map(|f| f.name)
                     .collect::<Vec<_>>()
                     .join(", ");
-                println!("rustDatView {}\nUsage: datview [OPTIONS] [FILE ...]\n\nOptions:\n  -f, --format NAME     Reader format (default: auto)\n  --dayfirst            Interpret ambiguous dates as day/month/year\n  --mode MODE           Signals/Regular, Distribution/PDF, Spectrum/FFT,\n                        Normalized/MinMax, Compare, Polar\n  --x INDEX             Zero-based X column (including Index)\n  --y INDEX[,INDEX]     Y column indices\n  --pipeline PATH       Load a processing pipeline JSON\n  --plot-options JSON   Serialized dv-plot PlotType options\n  --session PATH        Open a .dvsession workspace\n  --follow              Watch input files for changes\n  --export PATH         Export SVG, PNG, PDF, EPS or Python without a window\n  -h, --help            Display help\n  -V, --version         Display version\n\nUse -- before filenames beginning with a dash.\nFormats available: {formats}", env!("CARGO_PKG_VERSION"));
+                println!(
+                    "rustDatView {}
+Usage: rustDatView [OPTIONS] [FILE ...]
+
+Options:
+  -f, --format NAME     Reader format (default: auto)
+  --dayfirst            Interpret ambiguous dates as day/month/year
+  --mode MODE           Signals/Regular, Distribution/PDF, Spectrum/FFT,
+                        Normalized/MinMax, Compare, Polar
+  --x INDEX             Zero-based X column (including Index)
+  --y INDEX[,INDEX]     Y column indices
+  --pipeline PATH       Load a processing pipeline JSON
+  --plot-options JSON   Serialized dv-plot PlotType options
+  --session PATH        Open a .dvsession workspace
+  --follow              Watch input files for changes
+  --export PATH         Export SVG, PNG, PDF, EPS or Python without a window
+  -h, --help            Display help
+  -V, --version         Display version
+
+Use -- before filenames beginning with a dash.
+Formats available: {formats}",
+                    env!("CARGO_PKG_VERSION")
+                );
                 return Ok(None);
             }
             "-V" | "--version" => {
