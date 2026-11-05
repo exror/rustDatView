@@ -73,9 +73,7 @@ impl TableView {
         });
         self.source = self.source.min(workspace.tables.tabs.len() - 1);
         let table = &workspace.tables.tabs[self.source];
-        let Some(source) = workspace.sources.get(self.source) else {
-            return None;
-        };
+        let source = workspace.sources.get(self.source)?;
         let key = (workspace.data_revision, self.source, table.identity());
         if self.cache_key != Some(key) || self.cached_x_key != workspace.x_key {
             self.rebuild_index(workspace);

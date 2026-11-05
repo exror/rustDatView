@@ -1,4 +1,5 @@
-//! CPU-side pan benchmark: ten million samples, including egui tessellation.
+//! CPU-side pan benchmark: ten series of one million samples each, including
+//! egui tessellation. Run with `cargo run --release --example pan_bench`.
 use std::time::Instant;
 
 use dv_chart::{AxisFormat, ChartConfig, ChartState, ChartTheme, Dash, Draw, Pane, Scale, Series};
@@ -76,7 +77,7 @@ fn main() {
         ..Default::default()
     };
     let mut times = Vec::with_capacity(FRAMES);
-    let mut run = |state: &mut ChartState| {
+    let run = |state: &mut ChartState| {
         let output = context.run_ui(input(), |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 dv_chart::show(ui, state, &panes, &config, &[], &theme);

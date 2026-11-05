@@ -515,9 +515,7 @@ fn nearest(axis: &[f64], value: f64) -> Option<usize> {
     let next = axis.partition_point(|&x| if ascending { x < value } else { x > value });
     if next == 0 {
         Some(0)
-    } else if next == axis.len() {
-        Some(next - 1)
-    } else if (axis[next - 1] - value).abs() <= (axis[next] - value).abs() {
+    } else if next == axis.len() || (axis[next - 1] - value).abs() <= (axis[next] - value).abs() {
         Some(next - 1)
     } else {
         Some(next)
