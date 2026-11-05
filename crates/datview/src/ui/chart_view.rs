@@ -1,5 +1,5 @@
 //! The application-to-chart adapter. Screen and figure export both use this data.
-use std::{borrow::Cow, collections::BTreeMap};
+use std::{borrow::Cow, collections::BTreeMap, sync::{Arc, LazyLock}};
 
 use dv_chart::{
     AxisFormat, ChartConfig, ChartResponse, ChartState, ChartTheme, Dash, Draw, Mark, Pane, Scale,
@@ -89,6 +89,7 @@ pub(crate) fn show(
     state: &mut ChartState,
     settings: &Settings,
     options: &mut ChartOptions,
+    inspector_visible: &mut bool,
 ) -> ChartResponse {
     let mut regroup = false;
     let mut toolbar_view_changed = false;
@@ -190,6 +191,9 @@ pub(crate) fn show(
                                 .changed()
                             {
                                 workspace.panes.custom.insert(key.clone(), name);
+                                for series in workspace.series.iter().filter(|series| &series.key == key) {
+                                    workspace.panes.custom_series.remove(&series.id);
+                                }
                                 regroup = true;
                             }
                         });
@@ -242,6 +246,9 @@ pub(crate) fn show(
         .response
         .on_hover_text("Grid, legend, crosshair and axis options");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if super::widgets::icon_button(ui, super::icons::SLIDERS, "Show or hide inspector · Ctrl+I").clicked() {
+                *inspector_visible = !*inspector_visible;
+            }
             if let Some(range) = state.selection {
                 if super::widgets::icon_button(ui, super::icons::CLOSE, "Clear selection · Esc")
                     .clicked()
@@ -263,7 +270,7 @@ pub(crate) fn show(
                     }
                     toolbar_view_changed = true;
                 }
-            } else if !workspace.series.is_empty() {
+            } else if !workspace.series.is_empty() && ui.available_width() > 330.0 {
                 ui.label(
                     egui::RichText::new("Drag to select  ·  Scroll to zoom  ·  Right-drag to pan")
                         .size(11.5)
@@ -368,12 +375,13 @@ pub(crate) fn series_color(
     palette: &[Color32],
     series: &crate::series::SeriesData,
 ) -> Color32 {
-    workspace
-        .panes
-        .styles
-        .get(&series.key)
+    let specific = workspace.panes.specific_style(series.id);
+    specific
+        .or_else(|| workspace.panes.styles.get(&series.key))
         .and_then(|style| style.color)
-        .or_else(|| workspace.panes.colors.get(&series.key).copied())
+        .or_else(|| {
+            specific.is_none().then(|| workspace.panes.colors.get(&series.key).copied()).flatten()
+        })
         .map(color)
         .unwrap_or(palette[series.color_slot % palette.len()])
 }
@@ -440,6 +448,8 @@ pub(crate) fn with_chart<R>(
     let mut panes = Vec::with_capacity(groups.len());
     for (group_index, (name, indices)) in groups.iter().enumerate() {
         let first = &workspace.series[indices[0]];
+        let flags = workspace.mode == Mode::Signals
+            && indices.iter().all(|&index| workspace.series[index].family == "Flags");
         let unit = if indices
             .iter()
             .all(|&index| workspace.series[index].unit == first.unit)
@@ -448,15 +458,20 @@ pub(crate) fn with_chart<R>(
         } else {
             ""
         };
-        let unit_in_title = !unit.is_empty()
-            && name
-                .strip_suffix(unit)
-                .is_some_and(|prefix| prefix.ends_with(" · "));
+        let title_has_unit = |symbol: &str| {
+            !symbol.is_empty()
+                && (*name == symbol
+                    || name
+                        .strip_suffix(symbol)
+                        .is_some_and(|prefix| prefix.ends_with(" · ")))
+        };
+        let unit_in_title = title_has_unit(unit)
+            || (!unit.is_empty() && title_has_unit(&dv_core::units::parse_unit(unit).symbol));
         let y_label = if !options.y_label.is_empty() {
             options.y_label.as_str()
         } else if workspace.mode == Mode::Polar {
             polar_y_labels[group_index].as_str()
-        } else if unit_in_title {
+        } else if unit_in_title || flags {
             ""
         } else {
             unit
@@ -464,13 +479,15 @@ pub(crate) fn with_chart<R>(
         let mut lines = Vec::with_capacity(indices.len());
         for &index in indices {
             let series = &workspace.series[index];
-            let style = workspace.panes.styles.get(&series.key);
+            let style = workspace.panes.style_for(series.id, &series.key);
             let series_color = series_color(workspace, &chart_theme.series_palette, series);
             let draw = match style.and_then(|style| style.draw) {
                 Some(LineDraw::Points) => Draw::Points,
                 Some(LineDraw::LinesPoints) => Draw::LinesPoints,
                 Some(LineDraw::Steps) => Draw::Steps,
-                Some(LineDraw::Lines) | None => Draw::Lines,
+                Some(LineDraw::Lines) => Draw::Lines,
+                None if workspace.mode == Mode::Signals && series.family == "Flags" => Draw::Steps,
+                None => Draw::Lines,
             };
             let width = style
                 .and_then(|style| style.width)
@@ -528,13 +545,19 @@ pub(crate) fn with_chart<R>(
                 .pane_log_y
                 .get(&id)
                 .copied()
-                .unwrap_or(options.log_y)
+                .unwrap_or(options.log_y && !flags)
             {
                 Scale::Log10
             } else {
                 Scale::Linear
             },
-            y_format: AxisFormat::Number,
+            y_format: if flags {
+                static LABELS: LazyLock<Arc<[String]>> =
+                    LazyLock::new(|| Arc::from(["No".into(), "Yes".into()]));
+                AxisFormat::Category(Arc::clone(&LABELS))
+            } else {
+                AxisFormat::Number
+            },
             y_flip: options.flip_y,
             include_zero: options
                 .pane_include_zero
@@ -542,7 +565,7 @@ pub(crate) fn with_chart<R>(
                 .copied()
                 .unwrap_or(options.include_zero),
             series: lines,
-            weight: 1.0,
+            weight: if flags { 0.45 } else { 1.0 },
         });
     }
 
@@ -669,12 +692,14 @@ pub(crate) fn with_chart<R>(
                     label,
                     color: mark_color,
                 } if *mode == workspace.mode => {
+                    let curve_id = crate::panes::RangeRule::target_id(curve);
                     for (name, indices) in &groups {
                         if indices.iter().any(|&index| {
                             let series = &workspace.series[index];
-                            series.key == *curve
-                                || series.label == *curve
-                                || series.channel_label == *curve
+                            curve_id.map_or_else(
+                                || series.key == *curve || series.label == *curve || series.channel_label == *curve,
+                                |id| series.id == id,
+                            )
                         }) {
                             marks.push(Mark::Point {
                                 pane: Some(pane_id(name)),
@@ -700,6 +725,36 @@ pub(crate) fn with_chart<R>(
                     marks.push(Mark::Region {
                         x0: *min,
                         x1: *max,
+                        label: label.clone(),
+                        color: color(*mark_color),
+                    });
+                }
+                Annotation::VLine {
+                    mode,
+                    x_axis,
+                    x,
+                    label,
+                    color: mark_color,
+                } if *mode == workspace.mode
+                    && (x_axis.is_empty()
+                        || workspace.x_key.as_deref() == Some(x_axis.as_str())) =>
+                {
+                    marks.push(Mark::VLine {
+                        x: *x,
+                        label: label.clone(),
+                        color: color(*mark_color),
+                    });
+                }
+                Annotation::HLine {
+                    mode,
+                    pane,
+                    y,
+                    label,
+                    color: mark_color,
+                } if *mode == workspace.mode => {
+                    marks.push(Mark::HLine {
+                        pane: pane_id(pane),
+                        y: *y,
                         label: label.clone(),
                         color: color(*mark_color),
                     });

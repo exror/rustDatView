@@ -20,6 +20,7 @@ pub(crate) enum ActionId {
     ViewChart,
     ViewTable,
     ViewInfo,
+    ViewFields,
     ModeSignals,
     ModeDistribution,
     ModeSpectrum,
@@ -28,6 +29,7 @@ pub(crate) enum ActionId {
     ModePolar,
     ToggleStats,
     ToggleSidebar,
+    ToggleInspector,
     ToggleFollow,
     Search,
     Palette,
@@ -79,6 +81,7 @@ impl Menu {
 pub(crate) struct ActionContext {
     pub has_sources: bool,
     pub has_series: bool,
+    pub has_fields: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,6 +155,10 @@ fn always(_: &ActionContext) -> bool {
 
 fn has_sources(state: &ActionContext) -> bool {
     state.has_sources
+}
+
+fn has_fields(state: &ActionContext) -> bool {
+    state.has_fields
 }
 
 fn has_series(state: &ActionContext) -> bool {
@@ -307,6 +314,14 @@ pub(crate) static ACTIONS: &[Action] = &[
         has_sources
     ),
     action!(
+        ViewFields,
+        "Fields",
+        View / 0,
+        global(Modifiers::COMMAND, Key::Num4),
+        None,
+        has_fields
+    ),
+    action!(
         ModeSignals,
         "Signals",
         View / 1,
@@ -359,6 +374,14 @@ pub(crate) static ACTIONS: &[Action] = &[
         "Show or hide sidebar",
         View / 2,
         global(Modifiers::COMMAND, Key::B),
+        None,
+        always
+    ),
+    action!(
+        ToggleInspector,
+        "Show or hide inspector",
+        View / 2,
+        global(Modifiers::COMMAND, Key::I),
         None,
         always
     ),

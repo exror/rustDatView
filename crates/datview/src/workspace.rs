@@ -3,7 +3,11 @@ use crate::{
     loader::{self, FileRequest, FormulaSnapshot, Job, LoadKind, LoadedFile, Loader},
     selection,
 };
-use dv_core::{common::clean_col, Formula, Table, TableList};
+use dv_core::{
+    common::{clean_col, Extrap},
+    units::{parse_unit, split_name_unit},
+    Column, ColumnData, DataFrame, Formula, Table, TableList,
+};
 use dv_plot::{
     ActionKind, CompareMethod, CompareMode, FftOptions, MinMaxOptions, PdfOptions, Pipeline,
     PolarOptions,
@@ -66,6 +70,107 @@ impl Default for ModeOptions {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub(crate) enum SplitValue {
+    Number(u64),
+    Text(String),
+    Missing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum SplitRef<'a> {
+    Number(u64),
+    Text(&'a str),
+    Missing,
+}
+
+fn split_ref(column: &Column, row: usize) -> Option<SplitRef<'_>> {
+    match &column.data {
+        ColumnData::Float(values) | ColumnData::DateTime(values) => {
+            let value = *values.get(row)?;
+            Some(if value.is_nan() { SplitRef::Missing } else {
+                SplitRef::Number(if value == 0.0 { 0.0f64.to_bits() } else { value.to_bits() })
+            })
+        }
+        ColumnData::Str(values) => {
+            let value = values.get(row)?.trim();
+            Some(if value.is_empty() || value == "-" { SplitRef::Missing } else { SplitRef::Text(value) })
+        }
+    }
+}
+
+impl SplitValue {
+    fn matches(&self, value: SplitRef<'_>) -> bool {
+        match (self, value) {
+            (Self::Number(a), SplitRef::Number(b)) => *a == b,
+            (Self::Text(a), SplitRef::Text(b)) => a == b,
+            (Self::Missing, SplitRef::Missing) => true,
+            _ => false,
+        }
+    }
+    fn label(&self, column: &str) -> String {
+        match self {
+            Self::Number(bits) => format!("{column} {}", dv_chart::format::format_value(f64::from_bits(*bits), "", 12)),
+            Self::Text(value) => value.clone(),
+            Self::Missing => "summary".into(),
+        }
+    }
+}
+
+impl From<SplitRef<'_>> for SplitValue {
+    fn from(value: SplitRef<'_>) -> Self {
+        match value {
+            SplitRef::Number(bits) => Self::Number(bits),
+            SplitRef::Text(text) => Self::Text(text.to_owned()),
+            SplitRef::Missing => Self::Missing,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct MergeParent {
+    pub key: String,
+    pub name: String,
+    pub align_start: bool,
+    pub offset: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) enum GeneratedRecipe {
+    Split { parent: String, column: String, occurrence: usize, value: SplitValue },
+    Merge { parents: Vec<MergeParent>, x_key: String },
+    Stack { parents: Vec<String>, common_only: bool },
+    Transpose { parent: String },
+}
+
+impl GeneratedRecipe {
+    pub(crate) fn parent_keys(&self) -> Vec<&str> {
+        match self {
+            Self::Split { parent, .. } | Self::Transpose { parent } => vec![parent],
+            Self::Merge { parents, .. } => parents.iter().map(|parent| parent.key.as_str()).collect(),
+            Self::Stack { parents, .. } => parents.iter().map(String::as_str).collect(),
+        }
+    }
+
+    pub(crate) fn relocate_parent(&mut self, old: &str, new: &str) {
+        match self {
+            Self::Split { parent, .. } | Self::Transpose { parent } => {
+                if parent == old { *parent = new.to_owned(); }
+            }
+            Self::Merge { parents, .. } => {
+                for parent in parents {
+                    if parent.key == old { parent.key = new.to_owned(); }
+                }
+            }
+            Self::Stack { parents, .. } => {
+                for parent in parents {
+                    if parent == old { *parent = new.to_owned(); }
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Source {
@@ -78,6 +183,9 @@ pub(crate) struct Source {
     /// Ordinal in the file (or among generated outputs for fileless tables).
     pub frame: usize,
     pub frame_name: String,
+    pub recipe: Option<GeneratedRecipe>,
+    /// Number of table-processing steps present when the generated source was created.
+    pub recipe_stage: usize,
 }
 impl Default for Source {
     fn default() -> Self {
@@ -90,6 +198,8 @@ impl Default for Source {
             format: None,
             frame: 0,
             frame_name: String::new(),
+            recipe: None,
+            recipe_stage: 0,
         }
     }
 }
@@ -630,6 +740,8 @@ impl Workspace {
                         format: file.format.clone(),
                         frame,
                         frame_name,
+                        recipe: None,
+                        recipe_stage: 0,
                     }
                 };
             if let Some(desired) = desired_formulas {
@@ -695,14 +807,321 @@ impl Workspace {
     pub(crate) fn search(&mut self, query: &str) -> Vec<usize> {
         self.search_cache.search(query)
     }
+    /// Source and table order must always change together.
+    pub(crate) fn move_source(&mut self, from: usize, to: usize) {
+        if from >= self.sources.len() || to >= self.sources.len() || from == to {
+            return;
+        }
+        let source = self.sources.remove(from);
+        let table = self.tables.tabs.remove(from);
+        self.sources.insert(to, source);
+        self.tables.tabs.insert(to, table);
+        self.refresh_catalog(false);
+    }
+
+    pub(crate) fn sort_sources(&mut self) {
+        let mut order: Vec<_> = (0..self.sources.len()).collect();
+        order.sort_by_cached_key(|&index| self.sources[index].name.to_lowercase());
+        let mut sources: Vec<_> = std::mem::take(&mut self.sources).into_iter().map(Some).collect();
+        let mut tables: Vec<_> = std::mem::take(&mut self.tables.tabs).into_iter().map(Some).collect();
+        for index in order {
+            if let (Some(source), Some(table)) = (sources[index].take(), tables[index].take()) {
+                self.sources.push(source);
+                self.tables.tabs.push(table);
+            }
+        }
+        self.refresh_catalog(false);
+    }
+
+    /// Align active sources at zero, including any previous manual offsets.
+    pub(crate) fn align_all_starts(&mut self) -> bool {
+        let mut changed = false;
+        for source in self.sources.iter_mut().filter(|source| source.active) {
+            changed |= !source.align_start || source.offset != 0.0;
+            source.align_start = true;
+            source.offset = 0.0;
+        }
+        changed
+    }
+
+    /// Merge active sources on the selected X axis. Numeric channels are
+    /// interpolated; text channels hold their most recent value within a run.
+    pub(crate) fn merge_sources(&mut self) -> Result<(), String> {
+        let key = self.x_key.clone().ok_or("Choose an X axis before merging.")?;
+        let active: Vec<_> = self.sources.iter().enumerate()
+            .filter_map(|(index, source)| source.active.then_some(index))
+            .collect();
+        self.merge_selected(&active, &key)
+    }
+
+    fn merge_selected(&mut self, active: &[usize], key: &str) -> Result<(), String> {
+        if active.len() < 2 {
+            return Err("Select at least two sources to merge.".into());
+        }
+        let parents = active.iter().map(|&index| {
+            let source = &self.sources[index];
+            MergeParent { key: source.stable_key(), name: source.name.clone(), align_start: source.align_start, offset: source.offset }
+        }).collect();
+        let mut numeric_tables = Vec::with_capacity(active.len());
+        let mut x_indices = Vec::with_capacity(active.len());
+        let mut text_columns: Vec<(Vec<f64>, Vec<Column>)> = Vec::new();
+        let mut reference_unit = None;
+        for &index in active {
+            let source = &self.sources[index];
+            let table = &self.tables.tabs[index];
+            let frame = match &table.mask {
+                Some(mask) => table.data.filter_rows(mask),
+                None => table.data.clone(),
+            };
+            let x_index = frame.columns().iter().position(|column| clean_col(&column.name) == key)
+                .ok_or_else(|| format!("“{}” does not contain the selected X axis.", source.name))?;
+            let x_column = frame.column(x_index);
+            let (values, unit) = match &x_column.data {
+                ColumnData::Float(values) => {
+                    let (_, unit) = split_name_unit(&x_column.name);
+                    (values, parse_unit(&unit))
+                }
+                ColumnData::DateTime(values) => (values, parse_unit("s")),
+                ColumnData::Str(_) => return Err(format!("The X axis in “{}” is not numeric.", source.name)),
+            };
+            let target = reference_unit.get_or_insert_with(|| unit.clone());
+            if unit.convert_value(0.0, target).is_none() {
+                return Err("The selected X axes have incompatible units.".into());
+            }
+            let start = if source.align_start {
+                values.iter().copied().find(|value| value.is_finite()).unwrap_or(0.0)
+            } else {
+                0.0
+            };
+            let xs: Vec<f64> = values.iter()
+                .map(|&value| unit.convert_value(value + source.offset - start, target).unwrap_or(f64::NAN))
+                .collect();
+            if xs.is_empty() || xs.iter().any(|x| !x.is_finite())
+                || xs.windows(2).any(|pair| pair[0] > pair[1])
+            {
+                return Err(format!("The X axis in “{}” must be finite and sorted to merge.", source.name));
+            }
+            let mut numbers = Vec::new();
+            let mut strings = Vec::new();
+            for (column_index, column) in frame.columns().iter().enumerate() {
+                if column.name == "Index" {
+                    continue;
+                }
+                if column_index == x_index {
+                    numbers.push(Column::float(column.name.clone(), xs.clone()));
+                    continue;
+                }
+                let (label, unit) = split_name_unit(&column.name);
+                let name = if unit.is_empty() {
+                    format!("{label} · {}", source.name)
+                } else {
+                    format!("{label} · {} [{unit}]", source.name)
+                };
+                let mut column = column.clone();
+                column.name = name;
+                if column.is_string() {
+                    strings.push(column);
+                } else {
+                    numbers.push(column);
+                }
+            }
+            let data = DataFrame::from_columns(numbers).map_err(|error| error.to_string())?;
+            let table = Table::from_df(data, &source.name);
+            let x_index = table.data.columns().iter().position(|column| clean_col(&column.name) == key)
+                .ok_or("The selected X axis could not be prepared for merging.")?;
+            numeric_tables.push(table);
+            x_indices.push(x_index);
+            text_columns.push((xs, strings));
+        }
+        let mut tables = TableList::new(numeric_tables);
+        let (_, mut merged) = tables.merge_tabs(None, Some(&x_indices), Extrap::Nan);
+        let merged_x = merged.f64_col(x_indices[0]).into_owned();
+        for (xs, columns) in text_columns {
+            for column in columns {
+                let ColumnData::Str(values) = column.data else { continue };
+                let mut selected = Vec::with_capacity(merged_x.len());
+                for &x in &merged_x {
+                    let end = xs.partition_point(|&sample| sample <= x);
+                    selected.push(if end == 0 || x > xs[xs.len() - 1] {
+                        String::new()
+                    } else {
+                        values[end - 1].clone()
+                    });
+                }
+                merged.push(Column::new(column.name, ColumnData::Str(selected)))
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        self.add_generated_table(merged, "Merged sources");
+        let stage = self.pipeline.actions.iter().filter(|action| action.kind != ActionKind::PlotData).count();
+        if let Some(source) = self.sources.last_mut() {
+            source.recipe = Some(GeneratedRecipe::Merge { parents, x_key: key.to_owned() });
+            source.recipe_stage = stage;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn stack_sources(&mut self, common_only: bool) -> Result<(), String> {
+        let indices: Vec<_> = self.sources.iter().enumerate()
+            .filter_map(|(index, source)| source.active.then_some(index)).collect();
+        self.stack_selected(&indices, common_only)
+    }
+
+    fn stack_selected(&mut self, indices: &[usize], common_only: bool) -> Result<(), String> {
+        if indices.len() < 2 {
+            return Err("Select at least two sources to stack.".into());
+        }
+        let parents = indices.iter().map(|&index| self.sources[index].stable_key()).collect();
+        let (_, frame) = self.tables.vstack(Some(indices), common_only);
+        self.tables.tabs.pop();
+        self.add_generated_table(frame, "Stacked sources");
+        let stage = self.pipeline.actions.iter().filter(|action| action.kind != ActionKind::PlotData).count();
+        if let Some(source) = self.sources.last_mut() {
+            source.recipe = Some(GeneratedRecipe::Stack { parents, common_only });
+            source.recipe_stage = stage;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn transpose_source(&mut self, index: usize) -> Result<(), String> {
+        let source = self.sources.get(index).ok_or("Source is no longer available.")?;
+        let table = self.tables.tabs.get(index).ok_or("Source is no longer available.")?;
+        let name = format!("{} · transposed", source.name);
+        let parent = source.stable_key();
+        let data = match &table.mask {
+            Some(mask) => table.data.filter_rows(mask),
+            None => table.data.clone(),
+        };
+        let mut transposed = Table::from_df(data, &name);
+        transposed.transpose();
+        self.add_generated_table(transposed.data, &name);
+        let stage = self.pipeline.actions.iter().filter(|action| action.kind != ActionKind::PlotData).count();
+        if let Some(source) = self.sources.last_mut() {
+            source.recipe = Some(GeneratedRecipe::Transpose { parent });
+            source.recipe_stage = stage;
+        }
+        Ok(())
+    }
+
+    /// Create one source for each value, retaining the original source for undo.
+    pub(crate) fn split_source(&mut self, index: usize, column_index: usize) -> Result<(), String> {
+        let source = self.sources.get(index).ok_or("Source is no longer available.")?.clone();
+        let table = self.tables.tabs.get(index).ok_or("Source is no longer available.")?;
+        let column = table.data.columns().get(column_index).ok_or("Column is no longer available.")?;
+        let column_name = column.name.clone();
+        let occurrence = table.data.columns()[..column_index].iter().filter(|other| other.name == column_name).count();
+        let mut lookup = HashMap::new();
+        let mut groups: Vec<(SplitValue, Vec<usize>)> = Vec::new();
+        for row in 0..table.nrows() {
+            if table.mask.as_ref().is_some_and(|mask| !mask.get(row).copied().unwrap_or(false)) {
+                continue;
+            }
+            let Some(value) = split_ref(column, row) else { continue };
+            let group = if let Some(&group) = lookup.get(&value) {
+                group
+            } else {
+                if groups.len() == 64 {
+                    return Err("Split by column supports at most 64 distinct values.".into());
+                }
+                let group = groups.len();
+                lookup.insert(value, group);
+                groups.push((value.into(), Vec::new()));
+                group
+            };
+            groups[group].1.push(row);
+        }
+        if groups.is_empty() {
+            return Err("There are no rows to split.".into());
+        }
+        let parent = source.stable_key();
+        let outputs: Vec<_> = groups.into_iter().map(|(value, rows)| {
+            let mut frame = table.data.take_rows(&rows);
+            frame.remove(column_index);
+            let name = format!("{} · {}", source.name, value.label(&column_name));
+            let recipe = GeneratedRecipe::Split { parent: parent.clone(), column: column_name.clone(), occurrence, value };
+            (frame, name, recipe)
+        }).collect();
+        let stage = self.pipeline.actions.iter().filter(|action| action.kind != ActionKind::PlotData).count();
+        for (frame, name, recipe) in outputs {
+            let new_index = self.push_generated_table(frame, &name);
+            self.sources[new_index].offset = source.offset;
+            self.sources[new_index].align_start = source.align_start;
+            self.sources[new_index].recipe = Some(recipe);
+            self.sources[new_index].recipe_stage = stage;
+        }
+        self.sources[index].active = false;
+        self.refresh_catalog(false);
+        Ok(())
+    }
+
+    /// Replay a saved operation without changing the saved parents' options.
+    pub(crate) fn regenerate(&mut self, recipe: &GeneratedRecipe) -> Result<usize, String> {
+        let indices: Vec<_> = recipe.parent_keys().iter().map(|key| {
+            self.sources.iter().position(|source| source.stable_key() == *key)
+                .ok_or_else(|| format!("A parent source is unavailable: {key}"))
+        }).collect::<Result<_, _>>()?;
+        match recipe {
+            GeneratedRecipe::Merge { parents, x_key } => {
+                let saved: Vec<_> = indices.iter().map(|&index| {
+                    let source = &self.sources[index];
+                    (source.name.clone(), source.align_start, source.offset)
+                }).collect();
+                for (&index, parent) in indices.iter().zip(parents) {
+                    let source = &mut self.sources[index];
+                    source.name = parent.name.clone();
+                    source.align_start = parent.align_start;
+                    source.offset = parent.offset;
+                }
+                let result = self.merge_selected(&indices, x_key);
+                for (&index, (name, align, offset)) in indices.iter().zip(saved) {
+                    let source = &mut self.sources[index];
+                    source.name = name;
+                    source.align_start = align;
+                    source.offset = offset;
+                }
+                result?;
+            }
+            GeneratedRecipe::Stack { common_only, .. } => self.stack_selected(&indices, *common_only)?,
+            GeneratedRecipe::Transpose { .. } => self.transpose_source(indices[0])?,
+            GeneratedRecipe::Split { column, occurrence, value, .. } => {
+                let index = indices[0];
+                let table = &self.tables.tabs[index];
+                let column_index = table.data.columns().iter().enumerate()
+                    .filter(|(_, candidate)| candidate.name == *column)
+                    .nth(*occurrence).map(|(index, _)| index)
+                    .ok_or_else(|| format!("The split column “{column}” is unavailable."))?;
+                let selected: Vec<_> = (0..table.nrows()).filter(|&row| {
+                    table.mask.as_ref().is_none_or(|mask| mask.get(row).copied().unwrap_or(false))
+                        && split_ref(table.data.column(column_index), row).is_some_and(|item| value.matches(item))
+                }).collect();
+                if selected.is_empty() {
+                    return Err(format!("The split value “{}” is unavailable.", value.label(column)));
+                }
+                let mut frame = table.data.take_rows(&selected);
+                frame.remove(column_index);
+                let name = format!("{} · {}", self.sources[index].name, value.label(column));
+                self.add_generated_table(frame, &name);
+            }
+        }
+        let index = self.sources.len() - 1;
+        self.sources[index].recipe = Some(recipe.clone());
+        Ok(index)
+    }
+
+
     /// Add an in-memory table (fit result, merge, stack) as a new source.
     pub(crate) fn add_generated_table(&mut self, df: dv_core::DataFrame, name: &str) {
-        let ordinal = self
-            .sources
-            .iter()
+        self.push_generated_table(df, name);
+        self.refresh_catalog(false);
+    }
+
+    fn push_generated_table(&mut self, df: DataFrame, name: &str) -> usize {
+        let ordinal = self.sources.iter()
             .filter(|source| source.path.as_os_str().is_empty())
-            .count();
-        let mut table = dv_core::Table::from_df(df, name);
+            .map(|source| source.frame)
+            .max()
+            .map_or(0, |frame| frame.saturating_add(1));
+        let mut table = Table::from_df(df, name);
         table.rename(name);
         self.tables.tabs.push(table);
         self.sources.push(Source {
@@ -711,7 +1130,7 @@ impl Workspace {
             frame_name: name.to_owned(),
             ..Source::default()
         });
-        self.refresh_catalog(false);
+        self.sources.len() - 1
     }
     pub(crate) fn remove_source(&mut self, index: usize) {
         if index >= self.sources.len() {
@@ -950,5 +1369,74 @@ mod tests {
                 _ => panic!("Expected a datetime column"),
             }
         }
+    }
+
+    #[test]
+    fn aligning_active_sources_clears_offsets_and_preserves_identity() {
+        let mut w = Workspace::new(false);
+        for name in ["First", "Second", "Hidden"] {
+            let df = DataFrame::from_floats(["Time [s]", "Power [W]"], vec![vec![10.0, 11.0], vec![1.0, 2.0]]).expect("frame");
+            w.add_generated_table(df, name);
+        }
+        let original_key = w.sources[0].stable_key();
+        let original_id = crate::series::series_id(&w.sources[0], "power");
+        w.sources[0].name = "Renamed".into();
+        w.sources[0].offset = 3.0;
+        w.sources[1].offset = -2.0;
+        w.sources[2].active = false;
+        w.sources[2].offset = 7.0;
+        assert!(w.align_all_starts());
+        assert!(w.sources[0].align_start && w.sources[1].align_start);
+        assert_eq!((w.sources[0].offset, w.sources[1].offset), (0.0, 0.0));
+        assert!(!w.sources[2].align_start);
+        assert_eq!(w.sources[2].offset, 7.0);
+        assert!(!w.align_all_starts());
+        assert_eq!(w.sources[0].stable_key(), original_key);
+        assert_eq!(crate::series::series_id(&w.sources[0], "power"), original_id);
+    }
+
+    #[test]
+    fn merge_interpolates_aligned_sources_and_preserves_text() {
+        fn frame(xs: Vec<f64>, ys: Vec<f64>, states: &[&str]) -> DataFrame {
+            DataFrame::from_columns(vec![
+                Column::float("Power [W]", ys),
+                Column::float("Time [s]", xs),
+                Column::new("State", ColumnData::Str(states.iter().map(|s| (*s).to_owned()).collect())),
+            ]).expect("frame")
+        }
+        let mut w = Workspace::new(false);
+        w.add_generated_table(frame(vec![10.0, 12.0], vec![0.0, 20.0], &["idle", "load"]), "Eco");
+        w.add_generated_table(frame(vec![100.0, 101.0, 102.0], vec![100.0, 110.0, 120.0], &["a", "b", "c"]), "Performance");
+        w.set_x(clean_col("Time [s]"));
+        w.align_all_starts();
+        w.merge_sources().expect("merge");
+        let merged = &w.tables.tabs[2].data;
+        let x = merged.find("Time [s]").expect("X");
+        assert_eq!(merged.f64_col(x).as_ref(), &[0.0, 1.0, 2.0]);
+        let eco = merged.find("Power · Eco [W]").expect("Eco power");
+        assert_eq!(merged.f64_col(eco).as_ref(), &[0.0, 10.0, 20.0]);
+        let state = merged.find("State · Eco").expect("Eco state");
+        assert_eq!(merged.column(state).data, ColumnData::Str(vec!["idle".into(), "idle".into(), "load".into()]));
+        assert_eq!(w.sources[2].name, "Merged sources");
+    }
+
+    #[test]
+    fn stacking_common_columns_and_reordering_keep_sources_paired() {
+        let mut w = Workspace::new(false);
+        w.add_generated_table(DataFrame::from_floats(["Time [s]", "A"], vec![vec![0.0, 1.0], vec![1.0, 2.0]]).expect("frame"), "Z");
+        w.add_generated_table(DataFrame::from_floats(["Time [s]", "B"], vec![vec![2.0], vec![3.0]]).expect("frame"), "A");
+        let first_id = w.tables.tabs[0].identity();
+        w.sort_sources();
+        assert_eq!(w.sources[0].name, "A");
+        assert_eq!(w.tables.tabs[1].identity(), first_id);
+        w.move_source(1, 0);
+        assert_eq!(w.sources[0].name, "Z");
+        assert_eq!(w.tables.tabs[0].identity(), first_id);
+        w.stack_sources(true).expect("stack");
+        let frame = &w.tables.tabs[2].data;
+        assert_eq!(frame.nrows(), 3);
+        assert!(frame.find("A").is_none() && frame.find("B").is_none());
+        let x = frame.find("Time [s]").expect("X");
+        assert_eq!(frame.f64_col(x).as_ref(), &[0.0, 1.0, 2.0]);
     }
 }

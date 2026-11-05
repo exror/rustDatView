@@ -171,6 +171,10 @@ fn figure_svg(
     let [width, height] = dimensions(figure)?;
     let mut chart = chart.clone();
     chart.legend = figure.include_legend;
+    // A static figure has no hover, so legends need no room for live values.
+    chart.legend_values = false;
+    chart.crosshair = false;
+    chart.tooltip = false;
     if figure.include_title {
         if !figure.title.is_empty() {
             chart.title.clone_from(&figure.title);
@@ -496,31 +500,16 @@ pub(crate) fn python_script(
     use crate::workspace::Mode;
     use dv_core::common::clean_col;
     use dv_plot::{CompareMode, PlotType};
+    // One selection per plotted series, so removed or hidden-by-source series
+    // are not resurrected in the script.
     let mut selections = Vec::new();
-    for (index, (table, source)) in workspace
-        .tables
-        .tabs
-        .iter()
-        .zip(&workspace.sources)
-        .enumerate()
-    {
-        if !source.active {
-            continue;
-        }
+    for series in &workspace.series {
+        let Some(table) = workspace.tables.tabs.get(series.source) else { continue };
         let columns = table.data.columns();
-        let Some(x) = workspace.x_key.as_ref().and_then(|key| {
-            columns
-                .iter()
-                .position(|column| clean_col(&column.name) == *key)
-        }) else {
-            continue;
-        };
-        for key in &workspace.selected {
-            if let Some(y) = columns
-                .iter()
-                .position(|column| clean_col(&column.name) == *key)
-            {
-                selections.push((index, x, y));
+        let position = |key: &str| columns.iter().position(|column| clean_col(&column.name) == key);
+        if let (Some(x), Some(y)) = (workspace.x_key.as_deref().and_then(position), position(&series.key)) {
+            if !selections.contains(&(series.source, x, y)) {
+                selections.push((series.source, x, y));
             }
         }
     }

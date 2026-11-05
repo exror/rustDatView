@@ -8,7 +8,7 @@ use dv_core::{
     ColumnData, Table,
 };
 use dv_plot::{CompareMode, PlotData, PlotType};
-use std::{borrow::Cow, collections::HashMap};
+use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 #[derive(Clone, Debug)]
 pub(crate) struct SeriesData {
@@ -20,8 +20,8 @@ pub(crate) struct SeriesData {
     pub unit: String,
     pub family: String,
     pub x_label: String,
-    pub x: Vec<f64>,
-    pub y: Vec<f64>,
+    pub x: Arc<[f64]>,
+    pub y: Arc<[f64]>,
     pub generation: u64,
     pub datetime: bool,
     pub color_slot: usize,
@@ -102,6 +102,55 @@ fn raw_xy(
     Ok((x, y, xc.is_datetime() && !source.align_start))
 }
 
+// All unprocessed signals from the same table share their transformed X axis.
+// The mask and source alignment are common to the table, whereas plot actions
+// can depend on Y and must be evaluated separately.
+fn signal_xy(
+    table: &Table,
+    source: &Source,
+    ix: usize,
+    iy: usize,
+    shared_x: &mut HashMap<usize, Arc<[f64]>>,
+    source_index: usize,
+) -> Result<(Arc<[f64]>, Arc<[f64]>, bool), String> {
+    let xc = table.data.column(ix);
+    let x = numeric(&xc.data).ok_or_else(|| "X column is not numeric".to_owned())?;
+    let y =
+        numeric(&table.data.column(iy).data).ok_or_else(|| "Y column is not numeric".to_owned())?;
+    let start = if source.align_start {
+        x.iter().copied().find(|v| v.is_finite()).unwrap_or(0.0)
+    } else {
+        0.0
+    };
+    let shift = source.offset - start;
+    let x = Arc::clone(shared_x.entry(source_index).or_insert_with(|| {
+        if let Some(mask) = &table.mask {
+            x.iter()
+                .zip(mask)
+                .filter_map(|(&value, &keep)| keep.then_some(value + shift))
+                .collect::<Vec<_>>()
+                .into()
+        } else if shift != 0.0 {
+            x.iter()
+                .map(|value| value + shift)
+                .collect::<Vec<_>>()
+                .into()
+        } else {
+            Arc::from(x)
+        }
+    }));
+    let y = if let Some(mask) = &table.mask {
+        y.iter()
+            .zip(mask)
+            .filter_map(|(&value, &keep)| keep.then_some(value))
+            .collect::<Vec<_>>()
+            .into()
+    } else {
+        Arc::from(y)
+    };
+    Ok((x, y, xc.is_datetime() && !source.align_start))
+}
+
 fn build_plot(
     table: &Table,
     source: &Source,
@@ -137,19 +186,21 @@ fn finish(
     mut label: String,
     unit: String,
     x_label: String,
-    x: Vec<f64>,
-    mut y: Vec<f64>,
+    x: Arc<[f64]>,
+    mut y: Arc<[f64]>,
     datetime: bool,
     id: u64,
 ) -> SeriesData {
-    for (x, y) in x.iter().zip(&mut y) {
-        if workspace
-            .rules
-            .iter()
-            .filter(|rule| rule.matches(workspace.mode, key, &label))
-            .any(|rule| !rule.accepts(*x, *y))
-        {
-            *y = f64::NAN;
+    let rules: Vec<_> = workspace
+        .rules
+        .iter()
+        .filter(|rule| rule.matches(workspace.mode, key, &label, id))
+        .collect();
+    if !rules.is_empty() {
+        for (x, y) in x.iter().zip(Arc::make_mut(&mut y).iter_mut()) {
+            if rules.iter().any(|rule| !rule.accepts(*x, *y)) {
+                *y = f64::NAN;
+            }
         }
     }
     let channel = workspace.channels.iter().find(|channel| channel.key == key);
@@ -209,6 +260,7 @@ impl Workspace {
         if self.series_signature.as_deref() == Some(&signature) {
             return;
         }
+        let perf_start = std::time::Instant::now();
         self.generation = self.generation.wrapping_add(1);
         let mut old: HashMap<_, _> = std::mem::take(&mut self.series)
             .into_iter()
@@ -216,6 +268,7 @@ impl Workspace {
             .collect();
         let mut item_signatures = HashMap::new();
         let mut series = Vec::new();
+        let mut shared_x = HashMap::new();
         let active_count = self.sources.iter().filter(|source| source.active).count();
         let base = serde_json::to_string(&(
             self.data_revision,
@@ -273,6 +326,9 @@ impl Workspace {
                         continue;
                     }
                     let id = series_id(source, key);
+                    if self.mode != Mode::Compare && self.panes.removed.contains_key(&id) {
+                        continue;
+                    }
                     let item_key =
                         serde_json::to_string(&(&base, source, table.identity(), ix, iy))
                             .unwrap_or_default();
@@ -281,6 +337,11 @@ impl Workspace {
                     {
                         if let Some(mut cached) = old.remove(&id) {
                             cached.source = index;
+                            if self.mode == Mode::Signals && !self.pipeline.has_plot_actions() {
+                                shared_x
+                                    .entry(index)
+                                    .or_insert_with(|| Arc::clone(&cached.x));
+                            }
                             item_signatures.insert(id, item_key);
                             series.push(cached);
                             continue;
@@ -293,7 +354,13 @@ impl Workspace {
                             None
                         })
                     } else if self.mode == Mode::Signals {
-                        raw_xy(table, source, ix, iy, &self.pipeline).map(|(x, y, datetime)| {
+                        let values = if self.pipeline.has_plot_actions() {
+                            raw_xy(table, source, ix, iy, &self.pipeline)
+                                .map(|(x, y, datetime)| (x.into(), y.into(), datetime))
+                        } else {
+                            signal_xy(table, source, ix, iy, &mut shared_x, index)
+                        };
+                        values.map(|(x, y, datetime)| {
                             let (label, unit) = split_name_unit(&table.data.column(iy).name);
                             Some(finish(
                                 self,
@@ -333,7 +400,16 @@ impl Workspace {
                                 unit.clear();
                             }
                             Ok(Some(finish(
-                                self, index, key, label, unit, plot.sx, x, y, datetime, id,
+                                self,
+                                index,
+                                key,
+                                label,
+                                unit,
+                                plot.sx,
+                                x.into(),
+                                y.into(),
+                                datetime,
+                                id,
                             )))
                         })
                     };
@@ -383,7 +459,16 @@ impl Workspace {
                             plot.syl
                         };
                         series.push(finish(
-                            self, plot.it, &key, label, unit, plot.sx, x, y, datetime, id,
+                            self,
+                            plot.it,
+                            &key,
+                            label,
+                            unit,
+                            plot.sx,
+                            x.into(),
+                            y.into(),
+                            datetime,
+                            id,
                         ));
                     }
                 }
@@ -394,6 +479,13 @@ impl Workspace {
         self.series = series;
         self.item_signatures = item_signatures;
         self.series_signature = Some(full_signature(self, &pipeline));
+        if let Ok(path) = std::env::var("DV_PROFILE") {
+            use std::io::Write as _;
+            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                let row = format!("series\t{:.3}\t{}\n", perf_start.elapsed().as_secs_f64() * 1000.0, self.series.len());
+                let _ = file.write_all(row.as_bytes());
+            }
+        }
     }
 }
 
@@ -435,7 +527,7 @@ mod tests {
             action: FilterMode::Keep,
         });
         w.rebuild();
-        assert_eq!(w.series[0].x, [2., 3., 4.]);
+        assert_eq!(w.series[0].x.as_ref(), &[2., 3., 4.]);
         assert!(w.series[0].y[0].is_nan());
         assert_eq!(&w.series[0].y[1..], &[8., 12.]);
         let address = w.series[0].x.as_ptr();
@@ -447,6 +539,30 @@ mod tests {
             w.tables.tabs[0].data.column(2).floats().unwrap(),
             &[4., 8., 12.]
         );
+    }
+    #[test]
+    fn signals_share_aligned_masked_x_and_reuse_it_after_selection_changes() {
+        let mut w = sample();
+        w.tables.tabs[0]
+            .data
+            .push(dv_core::Column::float("Current [A]", vec![1., 2., 3.]))
+            .unwrap();
+        w.tables.tabs[0].mask = Some(vec![true, false, true]);
+        w.data_changed();
+        w.rebuild();
+        let first_x = Arc::clone(&w.series[0].x);
+        assert_eq!(first_x.as_ref(), &[2., 4.]);
+        w.selected.push("current".into());
+        w.rebuild();
+        assert_eq!(w.series.len(), 2);
+        assert!(Arc::ptr_eq(&first_x, &w.series[0].x));
+        assert!(Arc::ptr_eq(&w.series[0].x, &w.series[1].x));
+        assert_eq!(w.series[1].y.as_ref(), &[1., 3.]);
+        w.sources[0].offset = 5.0;
+        w.rebuild();
+        assert_eq!(w.series[0].x.as_ref(), &[5., 7.]);
+        assert!(Arc::ptr_eq(&w.series[0].x, &w.series[1].x));
+        assert!(!Arc::ptr_eq(&first_x, &w.series[0].x));
     }
     #[test]
     fn source_identity_survives_rename() {

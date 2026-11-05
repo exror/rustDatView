@@ -31,6 +31,7 @@ enum View {
     Chart,
     Table,
     Info,
+    Fields,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -62,6 +63,7 @@ pub(crate) struct DatView {
     settings: Settings,
     appearance: Appearance,
     sidebar: Sidebar,
+    inspector: ui::inspector::Inspector,
     welcome: ui::welcome::WelcomeView,
     brand_icon: egui::TextureHandle,
     chart: dv_chart::ChartState,
@@ -70,10 +72,12 @@ pub(crate) struct DatView {
     stats: StatsDock,
     table: TableView,
     info: ui::info_view::InfoView,
+    fields: ui::fields_view::FieldsView,
     view: View,
     dialog: Dialog,
     sidebar_visible: bool,
     stats_visible: bool,
+    inspector_visible: bool,
     palette_open: bool,
     palette_query: String,
     palette_focus: bool,
@@ -96,6 +100,8 @@ pub(crate) struct DatView {
     processing: ui::dialogs::pipeline::PipelineDialog,
     data_export: ui::dialogs::exports::DataExportDialog,
     script_export: ui::dialogs::exports::ScriptDialog,
+    /// Log Y was switched on automatically by entering Spectrum mode.
+    spectrum_log_y: bool,
 }
 
 impl DatView {
@@ -155,6 +161,7 @@ impl DatView {
             settings,
             appearance,
             sidebar: Sidebar::default(),
+            inspector: ui::inspector::Inspector::default(),
             welcome: ui::welcome::WelcomeView::default(),
             brand_icon,
             chart: dv_chart::ChartState::default(),
@@ -163,10 +170,12 @@ impl DatView {
             stats: StatsDock::default(),
             table: TableView::default(),
             info: ui::info_view::InfoView::default(),
+            fields: ui::fields_view::FieldsView::default(),
             view: View::Chart,
             dialog: Dialog::None,
             sidebar_visible: true,
             stats_visible: true,
+            inspector_visible: false,
             palette_open: false,
             palette_query: String::new(),
             palette_focus: false,
@@ -189,6 +198,7 @@ impl DatView {
             processing: Default::default(),
             data_export: Default::default(),
             script_export: Default::default(),
+            spectrum_log_y: false,
         };
         let session = launch.session.or_else(|| {
             if app.settings.restore_last_session && launch.paths.is_empty() {
@@ -211,6 +221,7 @@ impl DatView {
         ActionContext {
             has_sources: !self.workspace.tables.is_empty(),
             has_series: !self.workspace.series.is_empty(),
+            has_fields: self.fields.available(),
         }
     }
 
@@ -257,9 +268,8 @@ impl DatView {
         use ui::welcome::WelcomeRequest;
         match request {
             WelcomeRequest::OpenFile => self.open_dialog(false, None),
-            WelcomeRequest::OpenRecent(path) | WelcomeRequest::OpenSample(path) => {
-                self.open_paths(vec![path], false, None)
-            }
+            WelcomeRequest::OpenRecent(path) => self.open_paths(vec![path], false, None),
+            WelcomeRequest::OpenSample(paths) => self.open_paths(paths, false, None),
             WelcomeRequest::OpenSession(path) => self.open_session(path),
             WelcomeRequest::SampleError(error) => self.workspace.problems.push(error),
         }
@@ -309,6 +319,14 @@ impl DatView {
             Ok(()) => {
                 Self::remember(&mut self.settings.recent_sessions, path.clone());
                 self.session_path = Some(path);
+                let unsaved = self.workspace.sources.iter().zip(&self.workspace.tables.tabs).filter(|(source, table)| {
+                    source.path.as_os_str().is_empty()
+                        && source.recipe.is_none()
+                        && !self.workspace.pipeline.actions.iter().any(|action| action.generated_table(table))
+                }).count();
+                if unsaved > 0 {
+                    self.workspace.problems.push("Fit results are not saved in sessions; re-run the fit after opening it.".into());
+                }
                 self.notify("Session saved", false);
             }
             Err(error) => self
@@ -382,6 +400,7 @@ impl DatView {
             ActionId::ViewChart => self.view = View::Chart,
             ActionId::ViewTable => self.view = View::Table,
             ActionId::ViewInfo => self.view = View::Info,
+            ActionId::ViewFields => self.view = View::Fields,
             ActionId::ModeSignals => self.set_mode(Mode::Signals),
             ActionId::ModeDistribution => self.set_mode(Mode::Distribution),
             ActionId::ModeSpectrum => self.set_mode(Mode::Spectrum),
@@ -390,6 +409,7 @@ impl DatView {
             ActionId::ModePolar => self.set_mode(Mode::Polar),
             ActionId::ToggleStats => self.stats_visible = !self.stats_visible,
             ActionId::ToggleSidebar => self.sidebar_visible = !self.sidebar_visible,
+            ActionId::ToggleInspector => self.inspector_visible = !self.inspector_visible,
             ActionId::ToggleFollow => self.workspace.follow = !self.workspace.follow,
             ActionId::Search => {
                 self.sidebar_visible = true;
@@ -420,16 +440,29 @@ impl DatView {
     }
 
     fn set_mode(&mut self, mode: Mode) {
-        if self.workspace.mode != mode {
-            self.workspace.mode = mode;
-            if mode == Mode::Spectrum {
-                self.chart_options.log_y = true;
-                self.chart_options.pane_log_y.clear();
-            }
-            self.chart.x_view = None;
-            self.chart.y_views.clear();
-            self.workspace.rebuild();
+        if self.workspace.mode == mode {
+            return;
         }
+        // Spectra are read on a log scale (pyDatView does the same); undo it
+        // when leaving, unless the user had log Y on already.
+        if self.workspace.mode == Mode::Spectrum && self.spectrum_log_y {
+            self.chart_options.log_y = false;
+            self.spectrum_log_y = false;
+        }
+        if mode == Mode::Spectrum && !self.chart_options.log_y {
+            self.chart_options.log_y = true;
+            self.spectrum_log_y = true;
+        }
+        self.workspace.mode = mode;
+        self.chart_options.pane_log_y.clear();
+        // X means something else in every mode (time, frequency, value, angle).
+        self.chart.x_view = None;
+        self.chart.pane_x_views.clear();
+        self.chart.y_views.clear();
+        self.chart.selection = None;
+        self.chart.set_cursor(None);
+        self.cursor = None;
+        self.workspace.rebuild();
     }
 
     fn update_loading(&mut self, ctx: &egui::Context) {
@@ -565,10 +598,11 @@ impl DatView {
             ),
             (Mode::Polar, "Polar", "Angle/radius view · Alt+6"),
         ];
-        const VIEWS: [(View, &str, &str); 3] = [
+        const VIEWS: [(View, &str, &str); 4] = [
             (View::Chart, "Chart", "Interactive chart · Ctrl+1"),
             (View::Table, "Table", "Raw data · Ctrl+2"),
             (View::Info, "Info", "File and table details · Ctrl+3"),
+            (View::Fields, "Fields", "2D fields · Ctrl+4"),
         ];
         let tokens = theme::Tokens::for_dark(theme::is_dark(ctx));
         let action_context = self.action_context();
@@ -628,7 +662,8 @@ impl DatView {
                         return;
                     }
                     ui.add_space(6.0);
-                    if let Some(view) = widgets::segmented(ui, self.view, &VIEWS) {
+                    let views = if self.fields.available() { &VIEWS[..] } else { &VIEWS[..3] };
+                    if let Some(view) = widgets::segmented(ui, self.view, views) {
                         self.view = view;
                     }
                     if self.view == View::Chart {
@@ -681,11 +716,15 @@ impl DatView {
                         .first()
                         .zip(self.workspace.tables.tabs.first())
                     {
+                        let rows = table.nrows();
+                        let channels = table.ncols().saturating_sub(1);
                         let mut summary = format!(
-                            "{}  ·  {} rows  ·  {} channels",
+                            "{}  ·  {} {}  ·  {} {}",
                             source.name,
-                            format_count(table.nrows()),
-                            format_count(table.ncols().saturating_sub(1))
+                            format_count(rows),
+                            if rows == 1 { "row" } else { "rows" },
+                            format_count(channels),
+                            if channels == 1 { "channel" } else { "channels" }
                         );
                         if let Some((duration, hz)) = sampling_summary(&self.workspace) {
                             summary.push_str(&format!(
@@ -704,23 +743,29 @@ impl DatView {
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if !self.workspace.problems.is_empty() || missing_count != 0 {
-                            ui.menu_button(
-                                (
+                            egui::containers::menu::MenuButton::from_button(
+                                egui::Button::new((
                                     RichText::new(icons::WARNING)
                                         .family(theme::icon_family())
                                         .color(tokens.warning),
                                     self.workspace.problems.len().max(missing_count).to_string(),
-                                ),
-                                |ui| {
+                                ))
+                                .small()
+                                .corner_radius(6)
+                                .stroke(Stroke::new(1.0, tokens.border_strong)),
+                            )
+                            .ui(ui, |ui| {
                                     ui.set_max_width(460.0);
                                     ui.heading("Problems");
                                     egui::ScrollArea::vertical()
                                         .max_height(240.0)
                                         .show(ui, |ui| {
-                                            for message in &self.workspace.problems {
-                                                ui.label(message);
-                                                ui.separator();
-                                            }
+                                            ui.vertical(|ui| {
+                                                for message in &self.workspace.problems {
+                                                    ui.add(egui::Label::new(message).wrap());
+                                                    ui.separator();
+                                                }
+                                            });
                                         });
                                     if let Some(restore) = &self.restore {
                                         for missing in restore.unresolved() {
@@ -756,33 +801,47 @@ impl DatView {
                                             ui.close();
                                         }
                                     });
-                                },
-                            )
-                            .response
+                            })
+                            .0
                             .on_hover_text("Show problems");
                         }
-                        ui.toggle_value(&mut self.workspace.follow, "Follow")
-                            .on_hover_text("Watch source files for new data");
+                        let following = self.workspace.follow;
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new(if following { "●  Following" } else { "Follow" })
+                                        .size(11.5)
+                                        .color(if following { tokens.accent } else { tokens.text_secondary }),
+                                )
+                                .small()
+                                .corner_radius(6)
+                                .fill(if following { tokens.accent_soft } else { tokens.surface })
+                                .stroke(Stroke::new(1.0, if following { tokens.accent } else { tokens.border_strong })),
+                            )
+                            .on_hover_text("Watch source files for new data and keep the latest samples in view.")
+                            .clicked()
+                        {
+                            self.workspace.follow = !following;
+                        }
                         if let Some(cursor) = self.cursor {
                             let text = match self.workspace.series.first() {
                                 Some(series) if series.datetime => {
                                     dv_chart::format::format_time(cursor, 0.001)
                                 }
                                 Some(series) => {
-                                    let unit = self
-                                        .workspace
-                                        .channels
-                                        .iter()
-                                        .find(|c| Some(&c.key) == self.workspace.x_key.as_ref())
-                                        .map_or("", |c| c.unit.as_str());
-                                    let label = if series.x_label.is_empty() {
-                                        "X"
-                                    } else {
-                                        series.x_label.as_str()
-                                    };
+                                    let (label, mut unit) =
+                                        dv_core::units::split_name_unit(&series.x_label);
+                                    if unit.is_empty() && self.workspace.mode == Mode::Signals {
+                                        if let Some(channel) = self.workspace.channels.iter().find(|c| {
+                                            Some(&c.key) == self.workspace.x_key.as_ref()
+                                        }) {
+                                            unit.clone_from(&channel.unit);
+                                        }
+                                    }
+                                    let label = if label.is_empty() { "X" } else { &label };
                                     format!(
                                         "{label} = {}",
-                                        dv_chart::format::format_value(cursor, unit, 6)
+                                        dv_chart::format::format_value(cursor, &unit, self.settings.precision)
                                     )
                                 }
                                 None => String::new(),
@@ -793,7 +852,15 @@ impl DatView {
                 });
             });
         if copy_problems {
-            ctx.copy_text(self.workspace.problems.join("\n"));
+            let mut messages = self.workspace.problems.clone();
+            if let Some(restore) = &self.restore {
+                for missing in restore.unresolved() {
+                    if !messages.iter().any(|message| message.contains(&missing.reason)) {
+                        messages.push(missing.reason.clone());
+                    }
+                }
+            }
+            ctx.copy_text(messages.join("\n"));
         }
         if clear_problems {
             self.workspace.problems.clear();
@@ -806,198 +873,154 @@ impl DatView {
     }
 
     fn chart_context_menu(&mut self, response: &dv_chart::ChartResponse, ctx: &egui::Context) {
+        use crate::panes::{Annotation, LineDraw, PaneSettings, RangeRule, SeriesStyle};
+
         if let Some(context) = response.context {
             self.chart_context = Some(context);
         }
-        let Some(context) = self.chart_context else {
-            return;
-        };
-        let target = context
-            .series
-            .and_then(|id| self.workspace.series.iter().find(|series| series.id == id))
-            .map(|series| {
-                (
-                    series.id,
-                    series.key.clone(),
-                    series.label.clone(),
-                    series.color_slot,
-                )
-            });
-        let point_key = target
-            .as_ref()
-            .map(|(_, key, _, _)| key.clone())
-            .or_else(|| {
-                self.workspace
-                    .series
-                    .iter()
-                    .find(|series| context.pane == Some(ui::chart_view::pane_id(&series.pane)))
-                    .map(|series| series.key.clone())
-            });
+        let Some(context) = self.chart_context else { return };
         let mut rebuild = false;
         let mut copy_figure = false;
         response.response.context_menu(|ui| {
-            if let Some((id, key, label, slot)) = &target {
+            let palette = theme::palette_for(theme::is_dark(ctx), self.settings.palette);
+            let target = context.series.and_then(|id| self.workspace.series.iter().find(|s| s.id == id))
+                .map(|s| {
+                    let [r, g, b, _] = ui::chart_view::series_color(&self.workspace, &palette, s).to_srgba_unmultiplied();
+                    (s.id, s.key.clone(), s.label.clone(), [r, g, b], s.dash,
+                        self.workspace.mode == Mode::Signals && s.family == "Flags")
+                });
+            let anchor = context.series.and_then(|id| self.workspace.series.iter().find(|s| s.id == id))
+                .or_else(|| self.workspace.series.iter().find(|s| context.pane == Some(ui::chart_view::pane_id(&s.pane))));
+            let point_id = anchor.map(|s| s.id);
+            let pane = anchor.map(|s| s.pane.clone());
+            let unit = anchor.map(|s| s.unit.clone()).unwrap_or_default();
+            let datetime = anchor.is_some_and(|s| s.datetime);
+            if let Some((id, key, label, current_color, current_dash, flag)) = &target {
                 ui.strong(label);
-                if ui
-                    .button(if self.chart.hidden.contains(id) {
-                        "Show series"
-                    } else {
-                        "Hide series"
-                    })
-                    .clicked()
-                {
-                    if !self.chart.hidden.remove(id) {
-                        self.chart.hidden.insert(*id);
-                    }
+                if ui.button(if self.chart.hidden.contains(id) { "Show series" } else { "Hide series" }).clicked() {
+                    if !self.chart.hidden.remove(id) { self.chart.hidden.insert(*id); }
                     ui.close();
                 }
                 if ui.button("Show only this series").clicked() {
-                    self.chart.hidden = self
-                        .workspace
-                        .series
-                        .iter()
-                        .filter(|series| series.id != *id)
-                        .map(|series| series.id)
-                        .collect();
+                    self.chart.hidden = self.workspace.series.iter().filter(|s| s.id != *id).map(|s| s.id).collect();
                     ui.close();
                 }
-                if ui.button("Remove channel").clicked() {
-                    self.workspace.selected.retain(|selected| selected != key);
+                if ui.button("Remove series").clicked() {
+                    self.workspace.panes.removed.insert(*id, label.clone());
+                    self.chart.hidden.remove(id);
                     rebuild = true;
                     ui.close();
                 }
-                ui.menu_button("Line style", |ui| {
-                    let palette = theme::palette_for(theme::is_dark(ctx), self.settings.palette);
-                    let default = palette[*slot % palette.len()].to_srgba_unmultiplied();
-                    let style = self.workspace.panes.styles.entry(key.clone()).or_default();
-                    let mut color = style.color.unwrap_or([default[0], default[1], default[2]]);
+                ui.menu_button("Style", |ui| {
+                    let mut style = self.workspace.panes.style_for(*id, key).cloned().unwrap_or_default();
+                    let mut changed = false;
+                    let mut color = *current_color;
                     ui.horizontal(|ui| {
                         ui.label("Color");
                         if ui.color_edit_button_srgb(&mut color).changed() {
                             style.color = Some(color);
-                            rebuild = true;
+                            changed = true;
                         }
                     });
                     let mut width = style.width.unwrap_or(self.settings.line_width);
-                    if ui
-                        .add(egui::Slider::new(&mut width, 0.5..=6.0).text("Width"))
-                        .changed()
-                    {
+                    if ui.add(egui::Slider::new(&mut width, 0.5..=6.0).text("Width")).changed() {
                         style.width = Some(width);
-                        rebuild = true;
+                        changed = true;
                     }
-                    ui.horizontal(|ui| {
-                        ui.label("Dash");
-                        for (dash, label) in
-                            [(0, "Solid"), (1, "Dashed"), (2, "Dotted"), (3, "Dash-dot")]
-                        {
-                            if ui
-                                .selectable_label(style.dash == Some(dash), label)
-                                .clicked()
-                            {
+                    ui.menu_button("Dash", |ui| {
+                        for (dash, name) in [(0, "Solid"), (1, "Dashed"), (2, "Dotted"), (3, "Dash-dot")] {
+                            if ui.selectable_label(style.dash.unwrap_or(*current_dash) == dash, name).clicked() {
                                 style.dash = Some(dash);
-                                rebuild = true;
+                                changed = true;
+                                ui.close();
+                            }
+                        }
+                    });
+                    ui.menu_button("Draw", |ui| {
+                        let default = if *flag { LineDraw::Steps } else { LineDraw::Lines };
+                        for (draw, name) in [(LineDraw::Lines, "Lines"), (LineDraw::Points, "Points"),
+                            (LineDraw::LinesPoints, "Lines + points"), (LineDraw::Steps, "Steps")] {
+                            if ui.selectable_label(style.draw.unwrap_or(default) == draw, name).clicked() {
+                                style.draw = Some(draw);
+                                changed = true;
+                                ui.close();
                             }
                         }
                     });
                     if ui.button("Reset style").clicked() {
-                        *style = Default::default();
+                        style = SeriesStyle::default();
+                        changed = true;
+                    }
+                    if changed {
+                        self.workspace.panes.styles.insert(PaneSettings::series_style_key(*id), style);
                         rebuild = true;
                     }
                 });
                 ui.separator();
             }
-            if ui
-                .add_enabled(
-                    self.chart.selection.is_some(),
-                    egui::Button::new("Zoom to selection"),
-                )
-                .clicked()
-            {
-                if let Some(range) = self.chart.selection {
-                    if self.chart_options.link_x {
-                        self.chart.x_view = Some(range);
-                    } else {
-                        for series in &self.workspace.series {
-                            self.chart
-                                .pane_x_views
-                                .insert(ui::chart_view::pane_id(&series.pane), range);
-                        }
-                    }
+            if ui.add_enabled(point_id.is_some() && context.x.is_finite() && context.y.is_finite(), egui::Button::new("Add point annotation here")).clicked() {
+                if let Some(id) = point_id {
+                    self.workspace.annotations.push(Annotation::Point {
+                        mode: self.workspace.mode, curve: RangeRule::series_target(id),
+                        x: context.x, y: context.y, label: "Point".into(), color: ui::inspector::mark_color(ctx),
+                    });
                 }
                 ui.close();
             }
-            if ui.button("Fit all").clicked() {
-                self.chart.fit_all();
-                ui.close();
-            }
-            if ui.button("Auto-Y all").clicked() {
-                self.chart.y_views.clear();
-                ui.close();
-            }
-            ui.separator();
-            if ui
-                .add_enabled(
-                    point_key.is_some() && context.x.is_finite() && context.y.is_finite(),
-                    egui::Button::new("Add point annotation here"),
-                )
-                .clicked()
-            {
-                if let Some(key) = &point_key {
-                    self.workspace
-                        .annotations
-                        .push(crate::panes::Annotation::Point {
-                            mode: self.workspace.mode,
-                            curve: key.clone(),
-                            x: context.x,
-                            y: context.y,
-                            label: "Point".into(),
-                            color: [239, 121, 48],
-                        });
-                }
-                ui.close();
-            }
-            if ui
-                .add_enabled(
-                    self.chart.selection.is_some(),
-                    egui::Button::new("Add region from selection"),
-                )
-                .clicked()
-            {
-                if let Some([start, end]) = self.chart.selection {
-                    if let Some(region) = crate::panes::Annotation::region(
-                        self.workspace.mode,
-                        self.workspace.x_key.clone().unwrap_or_default(),
-                        start,
-                        end,
-                        "Selection".into(),
-                        [66, 101, 218],
-                    ) {
+            if ui.add_enabled(self.chart.selection.is_some(), egui::Button::new("Add region from selection")).clicked() {
+                if let Some([a, b]) = self.chart.selection {
+                    if let Some(region) = Annotation::region(self.workspace.mode, self.workspace.x_key.clone().unwrap_or_default(),
+                        a, b, "Selection".into(), ui::inspector::mark_color(ctx)) {
                         self.workspace.annotations.push(region);
                     }
                 }
                 ui.close();
             }
-            if ui.button("Copy value at cursor").clicked() {
-                ctx.copy_text(format!("{}\t{}", context.x, context.y));
+            if ui.add_enabled(pane.is_some() && context.y.is_finite(), egui::Button::new("Add reference line at this value")).clicked() {
+                if let Some(pane) = &pane {
+                    self.workspace.annotations.push(Annotation::HLine {
+                        mode: self.workspace.mode, pane: pane.clone(), y: context.y,
+                        label: "Reference".into(), color: ui::inspector::mark_color(ctx),
+                    });
+                }
+                ui.close();
+            }
+            if ui.add_enabled(context.x.is_finite(), egui::Button::new("Add event marker here")).clicked() {
+                self.workspace.annotations.push(Annotation::VLine {
+                    mode: self.workspace.mode, x_axis: self.workspace.x_key.clone().unwrap_or_default(),
+                    x: context.x, label: "Event".into(), color: ui::inspector::mark_color(ctx),
+                });
                 ui.close();
             }
             ui.separator();
-            if ui.button("Copy figure").clicked() {
-                copy_figure = true;
+            if ui.add_enabled(self.chart.selection.is_some(), egui::Button::new("Zoom to selection")).clicked() {
+                if let Some([a, b]) = self.chart.selection {
+                    let range = [a.min(b), a.max(b)];
+                    if self.chart_options.link_x {
+                        self.chart.x_view = Some(range);
+                    } else {
+                        for series in &self.workspace.series {
+                            self.chart.pane_x_views.insert(ui::chart_view::pane_id(&series.pane), range);
+                        }
+                    }
+                }
                 ui.close();
             }
-            if ui.button("Export figure…").clicked() {
-                self.dialog = Dialog::Export;
+            if ui.button("Fit all").clicked() { self.chart.fit_all(); ui.close(); }
+            if ui.button("Auto-Y all").clicked() { self.chart.y_views.clear(); ui.close(); }
+            if ui.add_enabled(context.x.is_finite() && context.y.is_finite(), egui::Button::new("Copy value")).clicked() {
+                let x = if datetime { dv_chart::format::format_time(context.x, 0.001) }
+                    else { dv_chart::format::format_value(context.x, "", self.settings.precision) };
+                let y = dv_chart::format::format_value(context.y, &unit, self.settings.precision);
+                ctx.copy_text(format!("{x}\t{y}"));
                 ui.close();
             }
+            ui.separator();
+            if ui.button("Copy figure").clicked() { copy_figure = true; ui.close(); }
+            if ui.button("Export figure…").clicked() { self.dialog = Dialog::Export; ui.close(); }
         });
-        if rebuild {
-            self.workspace.rebuild();
-        }
-        if copy_figure {
-            self.run_action(ActionId::CopyFigure, ctx);
-        }
+        if rebuild { self.workspace.rebuild(); }
+        if copy_figure { self.run_action(ActionId::CopyFigure, ctx); }
     }
 
     fn command_palette(&mut self, ctx: &egui::Context) {
@@ -1192,7 +1215,7 @@ impl DatView {
         if matches!(
             self.dialog,
             Dialog::Settings | Dialog::Shortcuts | Dialog::About | Dialog::OpenFormat
-        ) && !ctx.text_edit_focused()
+        ) && (matches!(self.dialog, Dialog::Settings) || !ctx.text_edit_focused())
             && ctx.input(|i| i.key_pressed(egui::Key::Escape))
         {
             self.dialog = Dialog::None;
@@ -1219,27 +1242,47 @@ impl DatView {
                 egui::Window::new("Keyboard shortcuts")
                     .open(&mut open)
                     .collapsible(false)
-                    .default_width(400.0)
+                    .default_width(470.0)
+                    .default_height(670.0)
                     .show(ctx, |ui| {
+                        ui.weak("Shortcuts are grouped by their menu.");
+                        ui.add_space(8.0);
                         egui::ScrollArea::vertical()
-                            .max_height(480.0)
+                            .max_height(600.0)
                             .show(ui, |ui| {
-                                egui::Grid::new("shortcut-grid")
-                                    .num_columns(2)
-                                    .spacing([30.0, 8.0])
-                                    .show(ui, |ui| {
-                                        for action in ACTIONS {
-                                            if let Some(shortcut) = &action.shortcut {
-                                                ui.label(action.label);
-                                                ui.label(
-                                                    RichText::new(shortcut.text(ctx))
-                                                        .monospace()
-                                                        .weak(),
-                                                );
-                                                ui.end_row();
+                                for menu in Menu::ALL {
+                                    if !ACTIONS.iter().any(|action| {
+                                        action.menu == menu && action.shortcut.is_some()
+                                    }) {
+                                        continue;
+                                    }
+                                    widgets::section_label(ui, menu.label());
+                                    egui::Grid::new(("shortcut-grid", menu.label()))
+                                        .num_columns(2)
+                                        .min_col_width(190.0)
+                                        .spacing([20.0, 5.0])
+                                        .show(ui, |ui| {
+                                            for action in ACTIONS.iter().filter(|action| action.menu == menu) {
+                                                if let Some(shortcut) = &action.shortcut {
+                                                    ui.label(action.label);
+                                                    ui.horizontal(|ui| {
+                                                        ui.spacing_mut().item_spacing.x = 3.0;
+                                                        for key in shortcut.text(ctx).split('+') {
+                                                            widgets::kbd_hint(ui, key);
+                                                        }
+                                                        if let Some(alternate) = &action.alternate_shortcut {
+                                                            ui.weak("or");
+                                                            for key in alternate.text(ctx).split('+') {
+                                                                widgets::kbd_hint(ui, key);
+                                                            }
+                                                        }
+                                                    });
+                                                    ui.end_row();
+                                                }
                                             }
-                                        }
-                                    });
+                                        });
+                                    ui.add_space(12.0);
+                                }
                             });
                     });
                 if !open {
@@ -1356,18 +1399,20 @@ impl DatView {
                         .corner_radius(8)
                         .inner_margin(egui::Margin::symmetric(12, 8))
                         .show(ui, |ui| {
-                            ui.set_max_width(380.0);
-                            ui.horizontal(|ui| {
-                                ui.colored_label(
-                                    if toast.error {
-                                        tokens.error
-                                    } else {
-                                        tokens.success
-                                    },
-                                    if toast.error { "!" } else { "•" },
+                            ui.set_width(360.0);
+                            ui.horizontal_top(|ui| {
+                                ui.label(
+                                    RichText::new(if toast.error { icons::WARNING_CIRCLE } else { icons::CHECK_CIRCLE })
+                                        .family(theme::icon_family())
+                                        .size(16.0)
+                                        .color(if toast.error { tokens.error } else { tokens.success }),
                                 );
-                                ui.label(&toast.message);
-                                if ui.small_button("×").clicked() {
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(280.0, 0.0),
+                                    Layout::top_down(Align::Min),
+                                    |ui| { ui.add(egui::Label::new(&toast.message).wrap()); },
+                                );
+                                if widgets::icon_button(ui, icons::CLOSE, "Dismiss notification").clicked() {
                                     dismissed = Some(index);
                                 }
                             });
@@ -1387,6 +1432,7 @@ impl eframe::App for DatView {
     }
 
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let perf_start = Instant::now();
         let ctx = root.ctx().clone();
         self.update_loading(&ctx);
         let dropped = ctx.input(|i| {
@@ -1399,6 +1445,10 @@ impl eframe::App for DatView {
         if !dropped.is_empty() {
             let add = ctx.input(|i| i.modifiers.ctrl || i.modifiers.shift);
             self.open_paths(dropped, add, None);
+        }
+        self.fields.sync(&mut self.workspace);
+        if self.view == View::Fields && !self.fields.available() {
+            self.view = View::Chart;
         }
         self.topbar(root, &ctx);
         self.statusbar(root, &ctx);
@@ -1429,6 +1479,9 @@ impl eframe::App for DatView {
                     }
                     if result.info {
                         self.view = View::Info;
+                    }
+                    if let Some(source) = result.export {
+                        self.data_export.open_source(&self.workspace, &self.chart, source);
                     }
                     match result.formula {
                         Some(ui::sidebar::FormulaRequest::New) => self.formula.open_new(),
@@ -1472,9 +1525,27 @@ impl eframe::App for DatView {
                     }
                 });
         }
+        if has_sources && self.inspector_visible && self.view == View::Chart {
+            let tokens = theme::Tokens::for_dark(theme::is_dark(&ctx));
+            egui::Panel::right("inspector")
+                .resizable(true)
+                .default_size(330.0)
+                .min_size(280.0)
+                .frame(
+                    egui::Frame::new()
+                        .fill(tokens.panel_bg)
+                        .inner_margin(egui::Margin::symmetric(12, 10))
+                        .stroke(Stroke::new(1.0, tokens.border)),
+                )
+                .show(root, |ui| {
+                    if self.inspector.show(ui, &mut self.workspace, &mut self.chart, &self.settings, &self.chart_options, self.cursor) {
+                        self.inspector_visible = false;
+                    }
+                });
+        }
         egui::CentralPanel::default().show(root, |ui| {
             if !has_sources {
-                if let Some(request) = self.welcome.show(ui, &self.settings) {
+                if let Some(request) = self.welcome.show(ui, &mut self.settings) {
                     self.handle_welcome(request);
                 }
             } else {
@@ -1489,6 +1560,7 @@ impl eframe::App for DatView {
                             &mut self.chart,
                             &self.settings,
                             &mut self.chart_options,
+                            &mut self.inspector_visible,
                         );
                         self.cursor = response.hover.as_ref().map(|hover| hover.x).or(self.cursor);
                         self.chart_context_menu(&response, &ctx);
@@ -1499,6 +1571,12 @@ impl eframe::App for DatView {
                         }
                     }
                     View::Info => self.info.show(ui, &self.workspace),
+                    View::Fields => {
+                        if let Some(message) = self.fields.show(ui) {
+                            let error = message.starts_with("Could not");
+                            self.notify(message, error);
+                        }
+                    }
                 }
             }
         });
@@ -1545,6 +1623,13 @@ impl eframe::App for DatView {
             None => {}
         }
         self.toast_overlay(root, &ctx);
+        if let Ok(path) = std::env::var("DV_PROFILE") {
+            use std::io::Write as _;
+            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                let row = format!("frame\t{:.3}\t{}\t{}\t{}\n", perf_start.elapsed().as_secs_f64() * 1000.0, self.workspace.series.len(), self.workspace.loading.is_some(), self.cursor.is_some());
+                let _ = file.write_all(row.as_bytes());
+            }
+        }
     }
 }
 

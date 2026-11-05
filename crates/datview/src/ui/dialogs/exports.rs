@@ -66,6 +66,14 @@ impl DataExportDialog {
         };
     }
 
+    /// Open preselected on one source (from the source's context menu).
+    pub(crate) fn open_source(&mut self, workspace: &Workspace, chart: &ChartState, index: usize) {
+        self.open(workspace, chart);
+        if index < workspace.sources.len() {
+            self.source = index;
+        }
+    }
+
     pub(crate) fn show(
         &mut self,
         ctx: &egui::Context,
@@ -230,11 +238,13 @@ impl DataExportDialog {
         let selected: Vec<usize> = match self.columns {
             Columns::All => (usize::from(index_column)..columns.len()).collect(),
             Columns::Plotted => {
+                // Exactly what the chart shows for this source, in plot order;
+                // series removed from the chart are not exported.
                 let mut indices: Vec<usize> = x_index.into_iter().collect();
-                for key in &workspace.selected {
+                for series in workspace.series.iter().filter(|series| series.source == self.source) {
                     if let Some(index) = columns
                         .iter()
-                        .position(|column| clean_col(&column.name) == *key)
+                        .position(|column| clean_col(&column.name) == series.key)
                     {
                         if !indices.contains(&index) {
                             indices.push(index);

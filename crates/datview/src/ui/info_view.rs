@@ -16,6 +16,7 @@ struct SourceDetails {
     size: Option<String>,
     modified: Option<String>,
     reader_info: Option<String>,
+    sampling: Option<(f64, f64)>,
     visible_rows: usize,
 }
 
@@ -38,19 +39,24 @@ impl InfoView {
                     let modified = metadata
                         .and_then(|metadata| metadata.modified().ok())
                         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                        .map(|time| dv_core::dataframe::format_datetime(time.as_secs_f64()));
+                        .map(|time| {
+                            let value = dv_core::dataframe::format_datetime(time.as_secs_f64());
+                            value.split('.').next().unwrap_or(&value).to_owned()
+                        });
                     let reader_info = table
                         .fileobject
                         .as_ref()
-                        .map(|file| file.info())
+                        .map(|file| file.info().replace("\n: ", "\n"))
                         .filter(|s| !s.trim().is_empty());
                     let visible_rows = table.mask.as_ref().map_or(table.data.nrows(), |mask| {
                         mask.iter().filter(|&&visible| visible).count()
                     });
+                    let sampling = sampling_summary(table);
                     SourceDetails {
                         size,
                         modified,
                         reader_info,
+                        sampling,
                         visible_rows,
                     }
                 })
@@ -109,6 +115,18 @@ impl InfoView {
                             if let Some(modified) = &details.modified {
                                 property(ui, "Modified", modified);
                             }
+                            if let Some((duration, rate)) = details.sampling {
+                                property(
+                                    ui,
+                                    "Sample rate",
+                                    &dv_chart::format::format_value(rate, "Hz", 4),
+                                );
+                                property(
+                                    ui,
+                                    "Duration",
+                                    &dv_chart::format::format_duration(duration, 0.001),
+                                );
+                            }
                             property(
                                 ui,
                                 "Included in chart",
@@ -118,7 +136,11 @@ impl InfoView {
                                 property(ui, "X alignment", "Start at zero");
                             }
                             if source.offset != 0.0 {
-                                property(ui, "X offset", &source.offset.to_string());
+                                property(
+                                    ui,
+                                    "X offset",
+                                    &dv_chart::format::format_value(source.offset, "", 6),
+                                );
                             }
                             if !table.mask_string.is_empty() {
                                 property(ui, "Mask", &table.mask_string);
@@ -126,6 +148,7 @@ impl InfoView {
                         });
                     if let Some(info) = &details.reader_info {
                         ui.add_space(6.0);
+                        ui.strong("Reader notes");
                         ui.label(info);
                     }
                     if !table.formulas.is_empty() {
@@ -148,8 +171,55 @@ impl InfoView {
                         ui.separator();
                     }
                 }
+                if !workspace.pipeline.actions.is_empty() {
+                    ui.add_space(18.0);
+                    ui.separator();
+                    ui.add_space(10.0);
+                    ui.heading("Processing steps");
+                    ui.add_space(4.0);
+                    for action in &workspace.pipeline.actions {
+                        ui.horizontal(|ui| {
+                            ui.label(if action.enabled { "●" } else { "○" });
+                            ui.label(action.plugin.summary());
+                            if !action.enabled {
+                                ui.weak("Off");
+                            }
+                        });
+                    }
+                }
             });
     }
+}
+
+/// Summarize each source's own time column, independently of the chart's X selection.
+fn sampling_summary(table: &dv_core::Table) -> Option<(f64, f64)> {
+    use dv_core::{
+        units::{parse_unit, split_name_unit, UnitFamily},
+        ColumnData,
+    };
+    let column = table
+        .data
+        .columns()
+        .get(crate::selection::default_x(table))?;
+    let (values, factor) = match &column.data {
+        ColumnData::DateTime(values) => (values.as_slice(), 1.0),
+        ColumnData::Float(values) => {
+            let (_, unit) = split_name_unit(&column.name);
+            let unit = parse_unit(&unit);
+            if unit.family != UnitFamily::Time {
+                return None;
+            }
+            (values.as_slice(), unit.to_base)
+        }
+        ColumnData::Str(_) => return None,
+    };
+    let first = values.iter().position(|value| value.is_finite())?;
+    let last = values.iter().rposition(|value| value.is_finite())?;
+    let duration = (values[last] - values[first]) * factor;
+    if !duration.is_finite() || duration <= 0.0 || first == last {
+        return None;
+    }
+    Some((duration, (last - first) as f64 / duration))
 }
 
 fn property(ui: &mut egui::Ui, name: &str, value: &str) {
@@ -162,11 +232,11 @@ fn format_bytes(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{bytes} B")
     } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
+        format!("{:.1} KiB", bytes as f64 / 1024.0)
     } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+        format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
     } else {
-        format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+        format!("{:.1} GiB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
     }
 }
 

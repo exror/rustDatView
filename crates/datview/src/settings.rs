@@ -21,6 +21,7 @@ pub(crate) enum SeriesPalette {
     #[default]
     Standard,
     Vivid,
+    ColorVisionFriendly,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -118,9 +119,11 @@ pub(crate) fn show(
     let mut close = false;
     egui::Window::new("Settings")
         .open(open)
-        .default_width(510.0)
-        .default_height(620.0)
+        .anchor(egui::Align2::RIGHT_TOP, [-24.0, 72.0])
+        .default_width(480.0)
+        .default_height(700.0)
         .min_width(390.0)
+        .collapsible(false)
         .resizable(true)
         .show(ctx, |ui| {
             egui::ScrollArea::vertical()
@@ -172,6 +175,7 @@ pub(crate) fn show(
                             .selected_text(match settings.palette {
                                 SeriesPalette::Standard => "Standard",
                                 SeriesPalette::Vivid => "Vivid",
+                                SeriesPalette::ColorVisionFriendly => "Color-vision friendly",
                             })
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
@@ -184,11 +188,20 @@ pub(crate) fn show(
                                     SeriesPalette::Vivid,
                                     "Vivid",
                                 );
+                                ui.selectable_value(
+                                    &mut settings.palette,
+                                    SeriesPalette::ColorVisionFriendly,
+                                    "Color-vision friendly",
+                                );
                             });
                     });
-                    ui.checkbox(&mut settings.show_sparklines, "Show channel sparklines");
-                    ui.checkbox(&mut settings.overview, "Show overview strip");
-                    ui.checkbox(&mut settings.break_gaps, "Break lines at gaps");
+                    ui.weak("Choose distinct series colors for charts and channel markers.");
+                    ui.checkbox(&mut settings.show_sparklines, "Show channel sparklines")
+                        .on_hover_text("Show a small preview beside each channel.");
+                    ui.checkbox(&mut settings.overview, "Show overview strip")
+                        .on_hover_text("Show a full-range navigator for time series with at least 2,000 samples.");
+                    ui.checkbox(&mut settings.break_gaps, "Break lines at gaps")
+                        .on_hover_text("Avoid drawing a line across missing or widely spaced samples.");
                     ui.add_enabled_ui(settings.break_gaps, |ui| {
                         ui.add(
                             egui::Slider::new(&mut settings.gap_factor, 1.0..=1000.0)
@@ -208,12 +221,15 @@ pub(crate) fn show(
                     ui.add_space(6.0);
                     ui.heading("Data and startup");
                     ui.add_space(4.0);
-                    ui.checkbox(&mut settings.dayfirst, "Parse ambiguous dates day first");
-                    ui.checkbox(&mut settings.watch_default, "Follow files by default");
+                    ui.checkbox(&mut settings.dayfirst, "Parse ambiguous dates day first")
+                        .on_hover_text("For example, read 03/04 as 3 April rather than March 4. Applies to newly opened or reloaded files.");
+                    ui.checkbox(&mut settings.watch_default, "Follow files by default")
+                        .on_hover_text("Enable Follow when the application starts.");
                     ui.checkbox(
                         &mut settings.restore_last_session,
                         "Restore the last session on startup",
-                    );
+                    )
+                    .on_hover_text("Open the most recently saved or opened session on startup, unless files were passed on the command line.");
                     ui.weak("Without automatic restore, sessions are opened explicitly.");
 
                     ui.add_space(12.0);

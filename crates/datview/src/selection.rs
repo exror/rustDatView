@@ -1,23 +1,29 @@
 use dv_core::{
     common::no_unit,
     units::{parse_unit, split_name_unit, UnitFamily},
-    Table,
+    Column, ColumnData, Table,
 };
 
-/// Prefer the familiar time names in their historical order, then any other
-/// datetime column, then the generated index.
+/// Choose the X axis: a column named like time (in several languages and
+/// logger conventions) whose values never decrease, then any datetime column,
+/// then a non-decreasing column measured in a time unit, then the index.
 pub(crate) fn default_x(table: &Table) -> usize {
     let columns = table.data.columns();
     columns
         .iter()
         .enumerate()
-        .filter(|(_, c)| c.is_float() || c.is_datetime())
+        .filter(|(_, c)| c.is_datetime() || (c.is_float() && non_decreasing(c)))
         .filter_map(|(i, c)| time_priority(&c.name).map(|rank| (rank, i)))
         .min()
         .map(|(_, i)| i)
-        .or_else(|| columns.iter().position(|c| c.is_datetime()))
+        .or_else(|| columns.iter().position(Column::is_datetime))
+        .or_else(|| {
+            columns.iter().position(|c| {
+                c.is_float() && !is_index(&c.name) && has_time_unit(&c.name) && non_decreasing(c)
+            })
+        })
         .or_else(|| columns.iter().position(|c| is_index(&c.name)))
-        .or_else(|| columns.iter().position(|c| c.is_float()))
+        .or_else(|| columns.iter().position(Column::is_float))
         .unwrap_or(0)
 }
 
@@ -25,38 +31,69 @@ pub(crate) fn is_index(name: &str) -> bool {
     no_unit(name).trim().eq_ignore_ascii_case("index")
 }
 
+/// Lowercase letters and digits only: "Time_Of_Day_Seconds" → "timeofdayseconds".
+fn compact(name: &str) -> String {
+    no_unit(name).chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect()
+}
+
+fn has_time_unit(name: &str) -> bool {
+    let (_, unit) = split_name_unit(name);
+    parse_unit(&unit).family == UnitFamily::Time
+}
+
+/// Lower is better. Names alone are not enough when a unit contradicts them.
 fn time_priority(name: &str) -> Option<u8> {
-    let name = no_unit(name);
-    let mut words = name
-        .split(|c: char| c.is_whitespace() || c == '_')
-        .filter(|s| !s.is_empty());
-    let first = words.next()?;
-    let rank = if first.eq_ignore_ascii_case("time") {
-        0
-    } else if first.eq_ignore_ascii_case("timestamp") {
-        2
-    } else if first.eq_ignore_ascii_case("datetime") {
-        3
-    } else if first.eq_ignore_ascii_case("date")
-        && words.next().is_some_and(|w| w.eq_ignore_ascii_case("time"))
-    {
-        3
-    } else if first.eq_ignore_ascii_case("elapsed")
-        && words.next().is_some_and(|w| w.eq_ignore_ascii_case("time"))
-    {
-        1
-    } else {
+    let (_, unit) = split_name_unit(name);
+    let unit_ok = unit.trim().is_empty() || parse_unit(&unit).family == UnitFamily::Time;
+    if !unit_ok {
         return None;
+    }
+    let rank = match compact(name).as_str() {
+        "time" | "zeit" | "temps" | "tiempo" | "tempo" | "tid" | "czas" | "aika" => 0,
+        "elapsedtime" | "elapsed" | "timeelapsed" | "relativetime" | "runtime" => 1,
+        "timestamp" | "timestamps" => 2,
+        "datetime" | "dateandtime" => 3,
+        "timeinseconds" | "timeofdayseconds" | "timeofday" | "seconds" | "sec" | "secs" | "t" => 4,
+        "x" | "xaxis" if !unit.trim().is_empty() => 5,
+        _ => return None,
     };
-    if let Some(unit) = words.next() {
-        if !["s", "sec", "secs", "second", "seconds"]
-            .iter()
-            .any(|u| unit.eq_ignore_ascii_case(u))
-        {
-            return None;
+    Some(rank)
+}
+
+/// Finite values never decrease (repeated values are fine: interleaved rows).
+fn non_decreasing(column: &Column) -> bool {
+    let ColumnData::Float(values) = &column.data else { return column.is_datetime() };
+    let mut previous = f64::NEG_INFINITY;
+    let mut finite = 0usize;
+    for &value in values.iter().filter(|v| v.is_finite()) {
+        if value < previous {
+            return false;
+        }
+        previous = value;
+        finite += 1;
+    }
+    finite >= 2
+}
+
+/// Identifier columns (core number, device index, process id) hold few
+/// distinct whole numbers and no unit; they are rarely what someone wants to
+/// plot first.
+fn identifier_like(column: &Column) -> bool {
+    if !split_name_unit(&column.name).1.trim().is_empty() {
+        return false;
+    }
+    let Some(values) = column.floats() else { return false };
+    let mut distinct = std::collections::BTreeSet::new();
+    for &value in values.iter().filter(|v| v.is_finite()) {
+        if value.fract() != 0.0 {
+            return false;
+        }
+        distinct.insert(value as i64);
+        if distinct.len() > 16 {
+            return false;
         }
     }
-    words.next().is_none().then_some(rank)
+    values.len() > distinct.len() * 4
 }
 
 fn priority(family: UnitFamily, name: &str) -> usize {
@@ -110,10 +147,12 @@ fn priority(family: UnitFamily, name: &str) -> usize {
 }
 
 /// Small tables show every usable numeric signal. Large telemetry tables pick
-/// one representative from power, frequency and temperature.
+/// one representative from power, frequency and temperature. Identifier
+/// columns (core numbers, device indices) are skipped when anything else is
+/// available.
 pub(crate) fn default_ys(table: &Table, x: usize) -> Vec<usize> {
     let columns = table.data.columns();
-    let usable: Vec<_> = columns
+    let mut usable: Vec<_> = columns
         .iter()
         .enumerate()
         .filter(|(i, c)| {
@@ -122,6 +161,9 @@ pub(crate) fn default_ys(table: &Table, x: usize) -> Vec<usize> {
                 && c.floats().is_some_and(|v| v.iter().any(|n| n.is_finite()))
         })
         .collect();
+    if usable.iter().any(|(_, c)| !identifier_like(c)) {
+        usable.retain(|(_, c)| !identifier_like(c));
+    }
     let numeric_count = columns
         .iter()
         .filter(|c| (c.is_float() || c.is_datetime()) && !is_index(&c.name))
@@ -229,5 +271,32 @@ mod tests {
             "Other",
         ]);
         assert_eq!(default_ys(&t, default_x(&t)), vec![3, 5, 7]);
+    }
+    fn frame(columns: &[(&str, &[f64])]) -> Table {
+        let df = DataFrame::from_floats(columns.iter().map(|(name, _)| *name), columns.iter().map(|(_, v)| v.to_vec()).collect()).unwrap();
+        Table::from_df(df, "test")
+    }
+    #[test]
+    fn recognizes_logger_and_localized_time_axes_but_not_unordered_ones() {
+        // PresentMon: the frame interval has a time unit but is not an axis.
+        let t = frame(&[("Dropped", &[0., 0., 1.]), ("TimeInSeconds", &[0.01, 0.02, 0.03]), ("msBetweenPresents [ms]", &[8., 9., 7.])]);
+        assert_eq!(default_x(&t), 2);
+        // Power analyzer (German), scope exports and Joulescope.
+        for name in ["Zeit [s]", "X [s]", "x-axis [s]", "#time", "Time_Of_Day_Seconds"] {
+            let t = frame(&[("Value [V]", &[3., 1., 2.]), (name, &[0., 1., 2.])]);
+            assert_eq!(default_x(&t), 2, "{name}");
+        }
+        // A time-named column that goes backwards, or carries a non-time unit, is data.
+        let t = frame(&[("Time [s]", &[2., 1., 0.]), ("Time [°C]", &[0., 1., 2.]), ("Elapsed [ms]", &[0., 5., 10.])]);
+        assert_eq!(default_x(&t), 3);
+    }
+    #[test]
+    fn identifier_columns_are_not_default_signals() {
+        // Five samples of four cores, interleaved as turbostat and PTAT write them.
+        let core: Vec<f64> = (0..20).map(|i| f64::from(i % 4)).collect();
+        let time: Vec<f64> = (0..20).map(|i| f64::from(i / 4)).collect();
+        let clock: Vec<f64> = (0..20).map(|i| 1000. + 37. * f64::from(i)).collect();
+        let t = frame(&[("Time [s]", &time), ("Core", &core), ("Avg_MHz", &clock)]);
+        assert_eq!(default_ys(&t, default_x(&t)), vec![3]);
     }
 }

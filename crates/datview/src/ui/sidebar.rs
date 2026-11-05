@@ -1,12 +1,16 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use dv_core::{common::clean_col, ColumnData};
+use dv_core::{
+    common::clean_col,
+    units::{parse_unit, split_name_unit, UnitFamily},
+    Column, ColumnData, Table,
+};
 use eframe::egui::{self, Align2, FontId, Pos2, Rect, Sense, Stroke, Vec2};
 
 use crate::{
     settings::Settings,
     ui::{icons, theme, widgets},
-    workspace::Workspace,
+    workspace::{ColorBy, Workspace},
 };
 
 #[derive(Default)]
@@ -17,9 +21,19 @@ pub(crate) struct Sidebar {
     show_index: bool,
     initialized: bool,
     last_clicked: Option<String>,
-    previews: HashMap<(u64, String), Preview>,
+    previews: HashMap<(u64, String), Option<Preview>>,
+    summaries: HashMap<(u64, String), String>,
+    preview_sources: HashMap<String, u64>,
+    cardinality: HashMap<u64, CardinalityScan>,
+    suggestions: HashMap<(u64, String), Option<(usize, usize)>>,
+    catalog_revision: u64,
     presence_signature: Vec<(u64, bool)>,
     presence: HashMap<String, usize>,
+    renaming: Option<(String, String)>,
+    rename_focus: bool,
+    stack_common_only: bool,
+    keyboard_key: Option<String>,
+    keyboard_id: Option<egui::Id>,
 }
 
 /// A request for the New/Edit channel dialog.
@@ -35,6 +49,7 @@ pub(crate) struct SidebarResponse {
     pub reload: Option<usize>,
     pub table: Option<usize>,
     pub info: bool,
+    pub export: Option<usize>,
     pub changed: bool,
     pub formula: Option<FormulaRequest>,
     pub processing: bool,
@@ -54,6 +69,182 @@ enum RowAction {
     Solo(String),
     SelectAll,
     ClearAll,
+}
+
+enum SourceAction {
+    Rename(usize),
+    Move(usize, usize),
+    Sort,
+    AlignAll,
+    Merge,
+    Stack,
+    Split(usize, usize),
+    Transpose(usize),
+    TransposeActive,
+    Remove(usize),
+}
+
+#[derive(Default)]
+struct DistinctValues {
+    numbers: HashSet<u64>,
+    strings: HashSet<String>,
+    missing: bool,
+}
+
+impl DistinctValues {
+    fn add(&mut self, column: &Column, row: usize) {
+        match &column.data {
+            ColumnData::Float(values) | ColumnData::DateTime(values) => {
+                if let Some(&value) = values.get(row) {
+                    if value.is_nan() { self.missing = true; }
+                    else { self.numbers.insert(if value == 0.0 { 0.0f64.to_bits() } else { value.to_bits() }); }
+                }
+            }
+            ColumnData::Str(values) => {
+                if let Some(value) = values.get(row) {
+                    let value = value.trim();
+                    if value.is_empty() || value == "-" { self.missing = true; }
+                    else if !self.strings.contains(value) { self.strings.insert(value.to_owned()); }
+                }
+            }
+        }
+    }
+    fn len(&self) -> usize {
+        self.numbers.len() + self.strings.len() + usize::from(self.missing)
+    }
+}
+
+fn split_priority(name: &str) -> u8 {
+    match clean_col(name).as_str() {
+        "index" | "gpuindex" | "deviceindex" => 0,
+        "core" | "cor" | "cpu" | "cpuid" | "coreid" => 1,
+        "device" | "processid" | "pid" | "application" | "gpu" | "thread" | "thr" => 2,
+        _ => 3,
+    }
+}
+
+struct CardinalityScan {
+    order: Vec<usize>,
+    position: usize,
+    row: usize,
+    values: DistinctValues,
+    candidates: Vec<(usize, usize)>,
+}
+impl CardinalityScan {
+    fn new(table: &Table) -> Self {
+        let mut order: Vec<_> = (0..table.ncols()).filter(|&index| {
+            !(index == 0 && table.data.column(index).name == "Index")
+        }).collect();
+        order.sort_by_key(|&index| split_priority(&table.data.column(index).name));
+        Self { order, position: 0, row: 0, values: DistinctValues::default(), candidates: Vec::new() }
+    }
+    fn advance(&mut self, table: &Table, mut budget: usize) -> bool {
+        while self.position < self.order.len() && budget > 0 {
+            let index = self.order[self.position];
+            let column = table.data.column(index);
+            while self.row < column.len() && budget > 0 && self.values.len() <= 64 {
+                self.values.add(column, self.row);
+                self.row += 1;
+                budget -= 1;
+            }
+            if self.row == column.len() || self.values.len() > 64 {
+                let n = self.values.len();
+                if (2..=64).contains(&n) {
+                    self.candidates.push((index, n));
+                }
+                self.position += 1;
+                self.row = 0;
+                self.values = DistinctValues::default();
+            }
+        }
+        self.position == self.order.len()
+    }
+}
+
+/// Inspect a bounded prefix; actual split choices are verified over all rows.
+fn interleaved_suggestion(table: &Table, x_key: Option<&str>) -> Option<(usize, usize)> {
+    let time_index = x_key.and_then(|key| table.data.columns().iter().position(|column| clean_col(&column.name) == key))
+        .filter(|&index| {
+            let column = table.data.column(index);
+            let (_, unit) = split_name_unit(&column.name);
+            column.is_datetime() || parse_unit(&unit).family == UnitFamily::Time || clean_col(&column.name).contains("time")
+        })
+        .or_else(|| table.data.columns().iter().position(|column| column.is_datetime() || clean_col(&column.name).contains("time")))?;
+    let xs = match &table.data.column(time_index).data {
+        ColumnData::Float(values) | ColumnData::DateTime(values) => values,
+        ColumnData::Str(_) => return None,
+    };
+    let mut runs = HashMap::<usize, usize>::new();
+    let mut previous = None;
+    let mut length = 0usize;
+    for &value in xs.iter().take(4096).filter(|value| value.is_finite()) {
+        if previous == Some(value) {
+            length += 1;
+        } else {
+            if length > 0 { *runs.entry(length).or_default() += 1; }
+            previous = Some(value);
+            length = 1;
+        }
+    }
+    if length > 0 { *runs.entry(length).or_default() += 1; }
+    let (&repeat, &frequency) = runs.iter().max_by_key(|(_, frequency)| *frequency)?;
+    if !(2..=64).contains(&repeat) || frequency < 2 { return None; }
+    let mut indices: Vec<_> = (0..table.ncols()).filter(|&index| index != time_index
+        && !(index == 0 && table.data.column(index).name == "Index")).collect();
+    indices.sort_by_key(|&index| split_priority(&table.data.column(index).name));
+    for index in indices {
+        let column = table.data.column(index);
+        let mut distinct = DistinctValues::default();
+        for row in 0..column.len().min(4096) {
+            distinct.add(column, row);
+            if distinct.len() > repeat { break; }
+        }
+        if distinct.len() == repeat {
+            return Some((index, repeat));
+        }
+    }
+    None
+}
+
+fn source_summary(table: &Table, x_key: Option<&str>, precision: usize) -> String {
+    let mut summary = format!(
+        "{} rows · {} ch",
+        count(table.nrows()),
+        count(table.ncols().saturating_sub(1))
+    );
+    let Some(column) = x_key.and_then(|key| {
+        table.data.columns().iter().find(|column| clean_col(&column.name) == key)
+    }) else {
+        return summary;
+    };
+    let (values, factor) = match &column.data {
+        ColumnData::DateTime(values) => (values, 1.0),
+        ColumnData::Float(values) => {
+            let (_, unit) = split_name_unit(&column.name);
+            let unit = parse_unit(&unit);
+            if unit.family != UnitFamily::Time {
+                return summary;
+            }
+            (values, unit.to_base)
+        }
+        ColumnData::Str(_) => return summary,
+    };
+    let Some((first_index, &first)) = values.iter().enumerate().find(|(_, x)| x.is_finite()) else {
+        return summary;
+    };
+    let Some((last_index, &last)) = values.iter().enumerate().rev().find(|(_, x)| x.is_finite()) else {
+        return summary;
+    };
+    let duration = (last - first) * factor;
+    if duration > 0.0 && last_index > first_index {
+        let rate = (last_index - first_index) as f64 / duration;
+        summary.push_str(&format!(
+            " · {} · {}",
+            dv_chart::format::format_duration(duration, 0.1),
+            dv_chart::format::format_value(rate, "Hz", precision)
+        ));
+    }
+    summary
 }
 
 fn count(value: usize) -> String {
@@ -153,10 +344,15 @@ impl Sidebar {
             .zip(&workspace.sources)
             .map(|(table, source)| (table.identity(), source.active))
             .collect();
-        if signature != self.presence_signature {
+        if signature != self.presence_signature || self.catalog_revision != workspace.data_revision {
             self.presence_signature = signature;
+            self.catalog_revision = workspace.data_revision;
             self.presence.clear();
+            self.preview_sources.clear();
             self.previews.clear();
+            self.summaries.clear();
+            self.cardinality.clear();
+            self.suggestions.clear();
             for (table, source) in workspace.tables.tabs.iter().zip(&workspace.sources) {
                 if source.active {
                     let keys: HashSet<_> = table
@@ -166,6 +362,7 @@ impl Sidebar {
                         .map(|column| clean_col(&column.name))
                         .collect();
                     for key in keys {
+                        self.preview_sources.entry(key.clone()).or_insert(table.identity());
                         *self.presence.entry(key).or_default() += 1;
                     }
                 }
@@ -176,6 +373,15 @@ impl Sidebar {
             .iter()
             .filter(|source| source.active)
             .count();
+        let source_count = workspace.sources.len();
+        let by_source = match workspace.panes.color_by {
+            ColorBy::Source => true,
+            ColorBy::Channel => false,
+            ColorBy::Auto => active_sources > 1 && workspace.series.iter().any(|series| {
+                workspace.series.iter().all(|other| other.pane != series.pane || other.key == series.key)
+            }),
+        };
+        let mut source_action = None;
         ui.add_space(3.0);
         ui.horizontal(|ui| {
             widgets::section_label(ui, "Sources");
@@ -183,99 +389,238 @@ impl Sidebar {
                 if widgets::icon_button(ui, icons::PLUS, "Add files · Ctrl+Shift+O").clicked() {
                     output.add = true;
                 }
+                ui.menu_button(egui::RichText::new(icons::MORE).family(theme::icon_family()), |ui| {
+                    if ui.add_enabled(source_count > 1, egui::Button::new("Sort by name")).clicked() {
+                        source_action = Some(SourceAction::Sort);
+                        ui.close();
+                    }
+                    if ui.add_enabled(active_sources > 1, egui::Button::new("Align all starts")).clicked() {
+                        source_action = Some(SourceAction::AlignAll);
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.add_enabled(active_sources > 1, egui::Button::new("Merge selected on X")).clicked() {
+                        source_action = Some(SourceAction::Merge);
+                        ui.close();
+                    }
+                    if ui.add_enabled(active_sources > 1, egui::Button::new("Stack selected rows")).clicked() {
+                        source_action = Some(SourceAction::Stack);
+                        ui.close();
+                    }
+                    ui.checkbox(&mut self.stack_common_only, "Stack common columns only");
+                    if ui.add_enabled(active_sources > 0, egui::Button::new("Transpose selected")).clicked() {
+                        source_action = Some(SourceAction::TransposeActive);
+                        ui.close();
+                    }
+                    ui.label(egui::RichText::new("Selected sources are checked above.").small().color(tokens.text_muted));
+                }).response.on_hover_text("Source actions");
             });
         });
-        let mut remove = None;
-        for (index, source) in workspace.sources.iter_mut().enumerate() {
-            let Some(table) = workspace.tables.tabs.get(index) else {
-                continue;
-            };
-            egui::Frame::new()
-                .fill(tokens.surface)
-                .stroke(Stroke::new(1.0, tokens.border))
-                .corner_radius(6)
-                .inner_margin(egui::Margin::same(8))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        if ui
-                            .checkbox(&mut source.active, "")
-                            .on_hover_text("Include this source in the chart")
-                            .changed()
-                        {
-                            output.changed = true;
-                        }
-                        let text =
-                            egui::RichText::new(&source.name)
-                                .strong()
-                                .color(if source.active {
-                                    tokens.text
-                                } else {
-                                    tokens.text_muted
-                                });
-                        let response = ui.add(egui::Label::new(text).truncate());
-                        response
-                            .clone()
-                            .on_hover_text(source.path.display().to_string());
-                        response.context_menu(|ui| {
-                            ui.label(egui::RichText::new("Source").strong());
-                            if ui.text_edit_singleline(&mut source.name).changed() {
-                                output.changed = true;
-                            }
-                            if ui
-                                .checkbox(&mut source.align_start, "Align start to zero")
-                                .on_hover_text(
-                                    "Subtract the first X value before applying the offset",
-                                )
-                                .changed()
+        if active_sources > 1 && ui.small_button("Align all starts").on_hover_text("Align each selected source's first X value to zero and clear offsets").clicked() {
+            source_action = Some(SourceAction::AlignAll);
+        }
+        let mut rename_commit = None;
+        let mut rename_cancel = false;
+        egui::ScrollArea::vertical().id_salt("sources-list").max_height(235.0).show(ui, |ui| {
+            for (index, source) in workspace.sources.iter_mut().enumerate() {
+                let Some(table) = workspace.tables.tabs.get(index) else { continue };
+                let key = source.stable_key();
+                let summary_key = (table.identity(), format!("{}:{}", workspace.x_key.as_deref().unwrap_or(""), settings.precision));
+                let summary = self.summaries.entry(summary_key)
+                    .or_insert_with(|| source_summary(table, workspace.x_key.as_deref(), settings.precision));
+                let source_color = by_source.then(|| workspace.panes.source_slots.get(&key).copied())
+                    .flatten().map(|slot| colors[slot % colors.len()]);
+                let suggestion_key = (table.identity(), workspace.x_key.clone().unwrap_or_default());
+                let suggestion = *self.suggestions.entry(suggestion_key)
+                    .or_insert_with(|| interleaved_suggestion(table, workspace.x_key.as_deref()));
+                egui::Frame::new()
+                    .fill(tokens.surface)
+                    .stroke(Stroke::new(1.0, tokens.border))
+                    .corner_radius(6)
+                    .inner_margin(egui::Margin::same(8))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            if ui.checkbox(&mut source.active, "")
+                                .on_hover_text("Include this source in the chart and source actions").changed()
                             {
                                 output.changed = true;
                             }
-                            ui.horizontal(|ui| {
-                                ui.label("X offset");
-                                if ui
-                                    .add(egui::DragValue::new(&mut source.offset).speed(0.1))
-                                    .changed()
-                                {
-                                    output.changed = true;
+                            if let Some(color) = source_color {
+                                let (dot, _) = ui.allocate_exact_size(Vec2::splat(9.0), Sense::hover());
+                                ui.painter().circle_filled(dot.center(), 4.0, color);
+                            }
+                            if let Some((_, draft)) = self.renaming.as_mut().filter(|(editing, _)| *editing == key) {
+                                let response = ui.add(egui::TextEdit::singleline(draft).desired_width(ui.available_width()));
+                                if self.rename_focus {
+                                    response.request_focus();
+                                    self.rename_focus = false;
                                 }
-                            });
-                            if ui.button("Reload source").clicked() {
-                                output.reload = Some(index);
-                                ui.close();
-                            }
-                            if ui.button("Show in table").clicked() {
-                                output.table = Some(index);
-                                ui.close();
-                            }
-                            if ui.button("File information").clicked() {
-                                output.info = true;
-                                ui.close();
-                            }
-                            ui.separator();
-                            if ui.button("Remove from workspace").clicked() {
-                                remove = Some(index);
-                                ui.close();
+                                if response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                                    rename_cancel = true;
+                                } else if response.lost_focus() || (response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter))) {
+                                    rename_commit = Some((index, draft.trim().to_owned()));
+                                }
+                            } else {
+                                let text = egui::RichText::new(&source.name).strong().color(if source.active { tokens.text } else { tokens.text_muted });
+                                let response = ui.add(egui::Label::new(text).truncate());
+                                let tip = if source.path.as_os_str().is_empty() { source.name.clone() } else { source.path.display().to_string() };
+                                response.clone().on_hover_text(tip);
+                                response.context_menu(|ui| {
+                                    if ui.button("Rename").clicked() {
+                                        source_action = Some(SourceAction::Rename(index));
+                                        ui.close();
+                                    }
+                                    if ui.add_enabled(!source.path.as_os_str().is_empty(), egui::Button::new("Reload source")).clicked() {
+                                        output.reload = Some(index);
+                                        ui.close();
+                                    }
+                                    if ui.button("Show in table").clicked() {
+                                        output.table = Some(index);
+                                        ui.close();
+                                    }
+                                    if ui.button("File information").clicked() {
+                                        output.info = true;
+                                        ui.close();
+                                    }
+                                    if ui.button("Export data…").clicked() {
+                                        output.export = Some(index);
+                                        ui.close();
+                                    }
+                                    ui.separator();
+                                    if ui.checkbox(&mut source.align_start, "Align start to 0").on_hover_text("Subtract the first X value before applying the offset").changed() {
+                                        output.changed = true;
+                                    }
+                                    ui.horizontal(|ui| {
+                                        ui.label("X offset");
+                                        output.changed |= ui.add(egui::DragValue::new(&mut source.offset).speed(0.1)).changed();
+                                    });
+                                    ui.separator();
+                                    ui.menu_button("Split by…", |ui| {
+                                        let scan = self.cardinality.entry(table.identity())
+                                            .or_insert_with(|| CardinalityScan::new(table));
+                                        let complete = scan.advance(table, 200_000);
+                                        ui.label(egui::RichText::new("Split rows by column").strong());
+                                        egui::ScrollArea::vertical().max_height(270.0).show(ui, |ui| {
+                                            for &(column, values) in &scan.candidates {
+                                                let name = &table.data.column(column).name;
+                                                if ui.button(format!("{name} · {} values", count(values))).clicked() {
+                                                    source_action = Some(SourceAction::Split(index, column));
+                                                    ui.close();
+                                                }
+                                            }
+                                        });
+                                        if !complete {
+                                            ui.label(egui::RichText::new("Finding columns…").small().color(tokens.text_muted));
+                                            ui.ctx().request_repaint();
+                                        } else if scan.candidates.is_empty() {
+                                            ui.label(egui::RichText::new("No columns with 2–64 distinct values.").small().color(tokens.text_muted));
+                                        }
+                                    });
+                                    if ui.button("Transpose").clicked() {
+                                        source_action = Some(SourceAction::Transpose(index));
+                                        ui.close();
+                                    }
+                                    if ui.add_enabled(index > 0, egui::Button::new("Move up")).clicked() {
+                                        source_action = Some(SourceAction::Move(index, index.saturating_sub(1)));
+                                        ui.close();
+                                    }
+                                    if ui.add_enabled(index + 1 < source_count, egui::Button::new("Move down")).clicked() {
+                                        source_action = Some(SourceAction::Move(index, index + 1));
+                                        ui.close();
+                                    }
+                                    ui.separator();
+                                    if ui.button("Remove from workspace").clicked() {
+                                        source_action = Some(SourceAction::Remove(index));
+                                        ui.close();
+                                    }
+                                });
                             }
                         });
+                        ui.horizontal(|ui| {
+                            ui.add_space(24.0);
+                            ui.add(egui::Label::new(egui::RichText::new(summary.as_str()).size(11.0).color(tokens.text_muted)).truncate())
+                                .on_hover_text(summary.as_str());
+                        });
+                        if let Some((column, devices)) = suggestion {
+                            let label = format!("Rows interleave {} devices — Split by {}", count(devices), table.data.column(column).name);
+                            if ui.link(egui::RichText::new(&label).size(11.0)).on_hover_text("Create a source for each value and hide this source").clicked() {
+                                source_action = Some(SourceAction::Split(index, column));
+                            }
+                        }
+                        if active_sources > 1 {
+                            ui.horizontal(|ui| {
+                                ui.add_space(22.0);
+                                output.changed |= ui.checkbox(&mut source.align_start, "Start at 0")
+                                    .on_hover_text("Align the first X value to zero").changed();
+                                ui.label(egui::RichText::new("Offset").size(11.0).color(tokens.text_secondary));
+                                output.changed |= ui.add(egui::DragValue::new(&mut source.offset).speed(0.1).max_decimals(6))
+                                    .on_hover_text("Offset in the X axis unit").changed();
+                            });
+                        }
                     });
-                    ui.horizontal(|ui| {
-                        ui.add_space(24.0);
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} rows  ·  {} channels",
-                                count(table.nrows()),
-                                count(table.ncols().saturating_sub(1))
-                            ))
-                            .size(11.5)
-                            .color(tokens.text_muted),
-                        );
-                    });
-                });
-            ui.add_space(3.0);
+                ui.add_space(3.0);
+            }
+        });
+        if rename_cancel {
+            self.renaming = None;
+        } else if let Some((index, name)) = rename_commit {
+            if !name.is_empty() {
+                if let Some(source) = workspace.sources.get_mut(index) {
+                    if source.name != name {
+                        source.name = name;
+                        output.changed = true;
+                    }
+                }
+            }
+            self.renaming = None;
         }
-        if let Some(index) = remove {
-            workspace.remove_source(index);
-            output.changed = true;
+        match source_action {
+            Some(SourceAction::Rename(index)) => {
+                if let Some(source) = workspace.sources.get(index) {
+                    self.renaming = Some((source.stable_key(), source.name.clone()));
+                    self.rename_focus = true;
+                }
+            }
+            Some(SourceAction::Move(from, to)) => {
+                workspace.move_source(from, to);
+                output.changed = true;
+            }
+            Some(SourceAction::Sort) => {
+                workspace.sort_sources();
+                output.changed = true;
+            }
+            Some(SourceAction::AlignAll) => output.changed |= workspace.align_all_starts(),
+            Some(SourceAction::Merge) => match workspace.merge_sources() {
+                Ok(()) => output.changed = true,
+                Err(error) => workspace.problems.push(error),
+            },
+            Some(SourceAction::Stack) => match workspace.stack_sources(self.stack_common_only) {
+                Ok(()) => output.changed = true,
+                Err(error) => workspace.problems.push(error),
+            },
+            Some(SourceAction::Split(index, column)) => match workspace.split_source(index, column) {
+                Ok(()) => output.changed = true,
+                Err(error) => workspace.problems.push(error),
+            },
+            Some(SourceAction::Transpose(index)) => match workspace.transpose_source(index) {
+                Ok(()) => output.changed = true,
+                Err(error) => workspace.problems.push(error),
+            },
+            Some(SourceAction::TransposeActive) => {
+                let indices: Vec<_> = workspace.sources.iter().enumerate()
+                    .filter_map(|(index, source)| source.active.then_some(index)).collect();
+                for index in indices {
+                    match workspace.transpose_source(index) {
+                        Ok(()) => output.changed = true,
+                        Err(error) => workspace.problems.push(error),
+                    }
+                }
+            }
+            Some(SourceAction::Remove(index)) => {
+                workspace.remove_source(index);
+                output.changed = true;
+            }
+            None => {}
         }
         let steps: Vec<String> = workspace
             .pipeline
@@ -463,6 +808,33 @@ impl Sidebar {
         } else {
             groups.push(("All channels".into(), matches.clone()));
         }
+        let ordered: Vec<_> = groups.iter().flat_map(|(_, indices)| indices.iter().copied()).collect();
+        let list_focused = self.keyboard_id.is_some_and(|id| ui.memory(|memory| memory.has_focus(id)));
+        let search_focused = search_response.as_ref().is_some_and(|response| response.has_focus());
+        let direction = if list_focused || search_focused {
+            ui.input_mut(|input| {
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                    1isize
+                } else if list_focused && input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                    -1
+                } else {
+                    0
+                }
+            })
+        } else {
+            0
+        };
+        let mut focus_target = None;
+        if direction != 0 && !ordered.is_empty() {
+            let current = if list_focused {
+                self.keyboard_key.as_ref().and_then(|key| ordered.iter().position(|&index| workspace.channels[index].key == *key))
+            } else {
+                None
+            };
+            let next = current.map_or(0, |index| (index as isize + direction).clamp(0, ordered.len() as isize - 1) as usize);
+            focus_target = Some(workspace.channels[ordered[next]].key.clone());
+        }
+        let mut previews_left = 3usize;
         egui::ScrollArea::vertical()
             .id_salt("channel-list")
             .auto_shrink([false, false])
@@ -498,11 +870,19 @@ impl Sidebar {
                                 Vec2::new(ui.available_width(), 27.0),
                                 Sense::click(),
                             );
+                            if focus_target.as_deref() == Some(&channel.key) {
+                                response.request_focus();
+                                response.scroll_to_me(Some(egui::Align::Center));
+                            }
+                            if response.has_focus() {
+                                self.keyboard_key = Some(channel.key.clone());
+                                self.keyboard_id = Some(response.id);
+                            }
                             if !ui.is_rect_visible(rect) {
                                 continue;
                             }
                             let painter = ui.painter().with_clip_rect(rect);
-                            if response.hovered() {
+                            if response.hovered() || response.has_focus() {
                                 painter.rect_filled(rect, 5.0, tokens.accent_soft);
                             }
                             let center = Pos2::new(rect.left() + 8.0, rect.center().y);
@@ -521,7 +901,7 @@ impl Sidebar {
                                 self.presence.get(&channel.key).copied().unwrap_or(0);
                             let badge_width = if active_sources > 1 && availability < active_sources
                             {
-                                26.0
+                                32.0
                             } else {
                                 0.0
                             };
@@ -558,15 +938,15 @@ impl Sidebar {
                                 name_color,
                             );
                             if badge_width > 0.0 {
+                                let right = rect.right() - unit_width - spark_width - 3.0;
+                                let badge = Rect::from_center_size(Pos2::new(right - 15.0, rect.center().y), Vec2::new(29.0, 18.0));
+                                painter.rect_filled(badge, 4.0, tokens.accent_soft);
                                 painter.text(
-                                    Pos2::new(
-                                        rect.right() - unit_width - spark_width - 3.0,
-                                        rect.center().y,
-                                    ),
-                                    Align2::RIGHT_CENTER,
+                                    badge.center(),
+                                    Align2::CENTER_CENTER,
                                     format!("{availability}/{active_sources}"),
-                                    FontId::proportional(10.0),
-                                    tokens.text_muted,
+                                    FontId::proportional(10.5),
+                                    tokens.text_secondary,
                                 );
                             }
                             if !channel.unit.is_empty() {
@@ -588,26 +968,19 @@ impl Sidebar {
                                 }
                             );
                             if settings.show_sparklines {
-                                let cache_key = workspace
-                                    .tables
-                                    .tabs
-                                    .iter()
-                                    .zip(&workspace.sources)
-                                    .find(|(table, source)| {
-                                        source.active
-                                            && table.data.columns().iter().any(|column| {
-                                                clean_col(&column.name) == channel.key
-                                            })
-                                    })
-                                    .map(|(table, _)| (table.identity(), channel.key.clone()));
+                                let cache_key = self.preview_sources.get(&channel.key)
+                                    .map(|&identity| (identity, channel.key.clone()));
                                 if let Some(cache_key) = cache_key {
                                     if !self.previews.contains_key(&cache_key) {
-                                        if let Some((key, value)) = preview(workspace, &channel.key)
-                                        {
-                                            self.previews.insert(key, value);
+                                        if previews_left > 0 {
+                                            previews_left -= 1;
+                                            let value = preview(workspace, &channel.key).map(|(_, value)| value);
+                                            self.previews.insert(cache_key.clone(), value);
+                                        } else {
+                                            ui.ctx().request_repaint();
                                         }
                                     }
-                                    if let Some(p) = self.previews.get(&cache_key) {
+                                    if let Some(p) = self.previews.get(&cache_key).and_then(Option::as_ref) {
                                         let spark = Rect::from_min_size(
                                             Pos2::new(rect.right() - 43.0, rect.top() + 5.0),
                                             Vec2::new(39.0, 17.0),
@@ -640,17 +1013,20 @@ impl Sidebar {
                                             ));
                                         }
                                         tooltip.push_str(&format!(
-                                            "\n{}min {:.4}  ·  mean {:.4}  ·  max {:.4}",
+                                            "\n{}min {} · mean {} · max {}",
                                             if p.sampled { "Preview: " } else { "" },
-                                            p.min,
-                                            p.mean,
-                                            p.max
+                                            dv_chart::format::format_value(p.min, &channel.unit, settings.precision),
+                                            dv_chart::format::format_value(p.mean, &channel.unit, settings.precision),
+                                            dv_chart::format::format_value(p.max, &channel.unit, settings.precision)
                                         ));
                                     }
                                 }
                             }
                             response.clone().on_hover_text(tooltip);
-                            if response.clicked() {
+                            if response.clicked() || (response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Space) || input.key_pressed(egui::Key::Enter))) {
+                                response.request_focus();
+                                self.keyboard_key = Some(channel.key.clone());
+                                self.keyboard_id = Some(response.id);
                                 let (shift, alt) =
                                     ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
                                 action = Some(RowAction::Toggle(channel.key.clone(), shift, alt));

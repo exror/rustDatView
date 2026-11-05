@@ -181,9 +181,35 @@ pub fn format_time(epoch: f64, step: f64) -> String {
         base
     }
 }
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum DurationStyle {
+    Seconds,
+    Minutes,
+    Hours,
+}
+
+pub(crate) fn duration_style(seconds: f64, step: f64) -> DurationStyle {
+    let scale = 10_u64.pow(time_decimals(step) as u32) as f64;
+    let rounded = (seconds.abs() * scale).round() / scale;
+    if rounded >= 3600.0 {
+        DurationStyle::Hours
+    } else if rounded >= 60.0 {
+        DurationStyle::Minutes
+    } else {
+        DurationStyle::Seconds
+    }
+}
 
 /// Format signed elapsed time as seconds, minutes:seconds, or hours:minutes:seconds.
 pub fn format_duration(seconds: f64, step: f64) -> String {
+    format_duration_with_style(seconds, step, DurationStyle::Seconds)
+}
+
+pub(crate) fn format_duration_with_style(
+    seconds: f64,
+    step: f64,
+    minimum_style: DurationStyle,
+) -> String {
     if !seconds.is_finite()
         || seconds.abs() >= u64::MAX as f64
         || (step.is_finite() && step > 0.0 && step < 1e-18)
@@ -210,10 +236,17 @@ pub fn format_duration(seconds: f64, step: f64) -> String {
     let hours = whole / 3600;
     let minutes = (whole / 60) % 60;
     let seconds = whole % 60;
-    let short = whole < 60;
-    let mut base = if hours > 0 {
+    let style = if whole >= 3600 {
+        DurationStyle::Hours
+    } else if whole >= 60 {
+        DurationStyle::Minutes
+    } else {
+        DurationStyle::Seconds
+    }
+    .max(minimum_style);
+    let mut base = if style == DurationStyle::Hours {
         format!("{sign}{hours}:{minutes:02}:{seconds:02}")
-    } else if !short {
+    } else if style == DurationStyle::Minutes {
         format!("{sign}{minutes}:{seconds:02}")
     } else {
         format!("{sign}{seconds}")
@@ -221,7 +254,7 @@ pub fn format_duration(seconds: f64, step: f64) -> String {
     if decimals > 0 {
         write!(base, ".{fraction:0decimals$}").expect("writing to a String cannot fail");
     }
-    if short {
+    if style == DurationStyle::Seconds {
         base.push_str(" s");
     }
     base

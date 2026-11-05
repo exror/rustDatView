@@ -252,6 +252,12 @@ fn hardware_monitor_two_header_rows_keep_duplicate_sensors_and_ids() {
     assert_eq!(packages.len(), 2, "{:?}", df.names());
     assert_eq!(floats(packages[0]), [28.562, 29.125]);
     assert_eq!(floats(packages[1]), [32.089, 33.0]);
+    assert_eq!(packages[0].name, "CPU Package [W]");
+    assert_eq!(packages[1].name, "CPU Package [°C]");
+    assert_eq!(
+        column(&df, "GPU Fan [RPM]").floats().unwrap(),
+        &[600.0, 610.0]
+    );
     let identity = format!("{} {:?}", file.info(), df.names());
     assert!(identity.contains("/intelcpu/0/power/0"), "{identity}");
     assert!(identity.contains("/intelcpu/0/temperature/0"), "{identity}");
@@ -481,15 +487,19 @@ fn rigol_sequence_preserves_index_and_timebase_metadata() {
     );
     let file = open(&fixture);
     let df = frame(file.as_ref());
-    assert_eq!((df.nrows(), df.ncols()), (2, 2));
-    assert!(df.column(0).name.starts_with('X'), "{:?}", df.names());
-    assert_eq!(floats(df.column(0)), [0.0, 1.0]);
+    assert_eq!((df.nrows(), df.ncols()), (2, 3));
+    assert_eq!(df.column(0).name, "Time [s]");
+    let time = floats(df.column(0));
+    near(time[0], -0.0005);
+    near(time[1], -0.000499);
+    assert!(df.column(1).name.starts_with('X'), "{:?}", df.names());
+    assert_eq!(floats(df.column(1)), [0.0, 1.0]);
     assert!(
-        df.column(1).name.starts_with("CH1") && df.column(1).name.contains('V'),
+        df.column(2).name.starts_with("CH1") && df.column(2).name.contains('V'),
         "{:?}",
         df.names()
     );
-    assert_eq!(floats(df.column(1)), [1.2, 1.3]);
+    assert_eq!(floats(df.column(2)), [1.2, 1.3]);
     let info = file.info();
     assert!(
         info.contains("Start") && info.contains("Increment"),
@@ -536,4 +546,45 @@ fn value_units_boolean_flags_and_named_missing_terminal_column() {
     assert!(floats(column(&df, "Fan [RPM]")).iter().all(|v| v.is_nan()));
     assert!(file.info().contains("unit suffixes"));
     assert!(file.info().contains("boolean"));
+}
+
+#[test]
+fn schema_units_are_inferred_only_for_identified_logs() {
+    let ptat = TempFile::new(
+        "csv",
+        b"Timestamp,Device,CFreq,UFreq,Temp,Power,Volt,TStat\n03/18/23 12:34:56,CPU0,1000,800,32,28,0.8,0x0\n03/18/23 12:34:57,CPU0,1100,900,33,29,0.9,0x1\n",
+    );
+    let df = frame(open(&ptat).as_ref());
+    assert_eq!(floats(column(&df, "CFreq [MHz]")), [1000.0, 1100.0]);
+    assert_eq!(floats(column(&df, "Temp [°C]")), [32.0, 33.0]);
+    assert_eq!(floats(column(&df, "Power [W]")), [28.0, 29.0]);
+    let joulescope = TempFile::new(
+        "csv",
+        b"#time,current,voltage,power,charge,energy\n0,0.1,3,0.3,0,0\n0.01,0.2,3,0.6,0.002,0.006\n",
+    );
+    let df = frame(open(&joulescope).as_ref());
+    assert_eq!(floats(column(&df, "#time [s]")), [0.0, 0.01]);
+    assert_eq!(floats(column(&df, "charge [A·s]")), [0.0, 0.002]);
+    assert_eq!(floats(column(&df, "power [W]")), [0.3, 0.6]);
+    let unrelated = TempFile::new("csv", b"Time,Power,Temp\n0,1,2\n1,3,4\n");
+    let df = frame(open(&unrelated).as_ref());
+    assert!(df.get("Power").is_some());
+    assert!(df.get("Temp").is_some());
+}
+
+#[test]
+fn mixed_column_reconstruction_skips_repeated_headers_and_sensor_groups() {
+    let mut text = String::from("Date,Time,Value\n");
+    for i in 0..70 {
+        text.push_str(&format!("03/18/2023,12:00:{:02},{i}\n", i % 60));
+    }
+    text.push_str("Date,Time,Value\nSensor Group: CPU,ignored,ignored\n");
+    text.push_str("03/18/2023,12:01:10,not numeric\n");
+    let fixture = TempFile::new("csv", text.as_bytes());
+    let df = frame(open(&fixture).as_ref());
+    assert_eq!(df.nrows(), 71);
+    let values = strings(column(&df, "Value"));
+    assert_eq!(values[0], "0");
+    assert_eq!(values[69], "69");
+    assert_eq!(values[70], "not numeric");
 }

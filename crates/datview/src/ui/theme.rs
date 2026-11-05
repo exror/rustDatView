@@ -55,7 +55,7 @@ impl Tokens {
                 border_strong: Color32::from_rgb(0x34, 0x3b, 0x45),
                 text: Color32::from_rgb(0xe7, 0xea, 0xee),
                 text_secondary: Color32::from_rgb(0xa6, 0xae, 0xba),
-                text_muted: Color32::from_rgb(0x6f, 0x78, 0x84),
+                text_muted: Color32::from_rgb(0x89, 0x94, 0xa2),
                 accent: Color32::from_rgb(0x76, 0x92, 0xf5),
                 accent_soft: Color32::from_rgba_unmultiplied(0x76, 0x92, 0xf5, 41),
                 success: Color32::from_rgb(0x3f, 0xb6, 0x8b),
@@ -75,7 +75,7 @@ impl Tokens {
                 border_strong: Color32::from_rgb(0xcd, 0xd3, 0xdb),
                 text: Color32::from_rgb(0x1a, 0x1e, 0x23),
                 text_secondary: Color32::from_rgb(0x59, 0x62, 0x6e),
-                text_muted: Color32::from_rgb(0x8b, 0x94, 0xa0),
+                text_muted: Color32::from_rgb(0x68, 0x73, 0x80),
                 accent: Color32::from_rgb(0x42, 0x65, 0xda),
                 accent_soft: Color32::from_rgba_unmultiplied(0x42, 0x65, 0xda, 31),
                 success: Color32::from_rgb(0x1f, 0x9d, 0x6c),
@@ -123,6 +123,22 @@ pub(crate) fn palette_for(dark: bool, choice: SeriesPalette) -> [Color32; 10] {
                 [
                     0x0079b5, 0xd52f56, 0x588b00, 0x8a3dd0, 0xb76e00, 0x008779, 0xbc3680, 0x4e57ce,
                     0xc44e00, 0x566577,
+                ]
+            };
+            colors.map(rgb)
+        }
+        // Okabe–Ito hues with accessible neutral and blue-violet extensions.
+        // Light and dark versions keep the same ordering across themes.
+        SeriesPalette::ColorVisionFriendly => {
+            let colors = if dark {
+                [
+                    0x56b4e9, 0xe69f00, 0x00c49a, 0xf0e442, 0xf08062, 0xafa1e8, 0xe78ac3, 0xb8c1cc,
+                    0x72c8bd, 0xf2bd77,
+                ]
+            } else {
+                [
+                    0x0072b2, 0xa66300, 0x007a5e, 0x8a7500, 0xb43c17, 0x6252a5, 0xa64075, 0x59636f,
+                    0x087b79, 0x9a5d18,
                 ]
             };
             colors.map(rgb)

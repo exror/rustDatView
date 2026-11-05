@@ -2,7 +2,10 @@
 
 use chrono::{DateTime, Datelike, NaiveDate};
 
-use crate::format::{date_at, format_duration, format_time, format_time_with_date, format_value};
+use crate::format::{
+    date_at, duration_style, format_duration_with_style, format_time, format_time_with_date,
+    format_value,
+};
 use crate::{AxisFormat, Scale};
 
 const MAX_TICKS: usize = 512;
@@ -346,6 +349,16 @@ fn label_ticks(
     } else {
         number_precision(&values, step)
     };
+    let duration_max = values
+        .iter()
+        .map(|(value, _)| value.abs())
+        .fold(0.0_f64, f64::max);
+    let duration_step = if logarithmic && duration_max > 0.0 {
+        log_value(duration_max.log10().floor() as i32, 1)
+    } else {
+        step
+    };
+    let duration_style = duration_style(duration_max, duration_step);
     let mut minor_index = 0;
     let mut last_date = None;
     values
@@ -374,7 +387,9 @@ fn label_ticks(
                 match format {
                     AxisFormat::Number if logarithmic => log_label(value, precision),
                     AxisFormat::Number => format_value(value, "", precision),
-                    AxisFormat::Duration => format_duration(value, label_step),
+                    AxisFormat::Duration => {
+                        format_duration_with_style(value, label_step, duration_style)
+                    }
                     AxisFormat::DateTime => {
                         if label_step < DAY {
                             let date = date_at(value, label_step);
@@ -718,7 +733,7 @@ mod tests {
                 .iter()
                 .map(|tick| tick.label.as_str())
                 .collect::<Vec<_>>(),
-            vec!["-2:00", "-1:00", "0 s", "1:00", "2:00"]
+            vec!["-2:00", "-1:00", "0:00", "1:00", "2:00"]
         );
         let categories =
             AxisFormat::Category(Arc::from(["Idle".into(), "Load".into(), "Cool".into()]));
@@ -730,5 +745,20 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(0.0, "Idle"), (1.0, "Load"), (2.0, "Cool")]
         );
+    }
+
+    #[test]
+    fn duration_ticks_use_one_style_for_the_entire_axis() {
+        let labels = |max, target| {
+            axis_ticks(0.0, max, target, &AxisFormat::Duration, Scale::Linear)
+                .into_iter()
+                .map(|tick| tick.label)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            labels(120.0, 9),
+            ["0:00", "0:15", "0:30", "0:45", "1:00", "1:15", "1:30", "1:45", "2:00"]
+        );
+        assert_eq!(labels(7200.0, 3), ["0:00:00", "1:00:00", "2:00:00"]);
     }
 }

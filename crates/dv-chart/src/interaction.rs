@@ -263,6 +263,7 @@ fn update_drag(
     config: &ChartConfig<'_>,
     drag: &mut Drag,
     pos: Pos2,
+    shift_held: bool,
     events: &mut Events,
 ) {
     drag.current = pos;
@@ -302,7 +303,9 @@ fn update_drag(
             let dx = f64::from((pos.x - drag.origin.x) / drag.plot.width().max(1.0));
             let dy = f64::from((pos.y - drag.origin.y) / drag.plot.height().max(1.0));
             set_x(state, config, drag.pane, shift(drag.x, dx));
-            set_y(state, drag.pane, shift(drag.y, -dy), drag.y.scale);
+            if (shift_held || drag.origin.x < drag.plot.left()) && dy != 0.0 {
+                set_y(state, drag.pane, shift(drag.y, -dy), drag.y.scale);
+            }
             events.view_changed = true;
         }
         Kind::BoxZoom => {}
@@ -371,7 +374,14 @@ pub(crate) fn handle(
     let pointer = ctx.input(|i| i.pointer.hover_pos()).or(pos);
     state.highlighted = pointer
         .filter(|p| action_at(layout, *p).is_none())
-        .and_then(|p| legend_at(layout, p));
+        .and_then(|p| legend_at(layout, p))
+        .filter(|id| {
+            !state.hidden.contains(id)
+                && panes
+                    .iter()
+                    .flat_map(|pane| &pane.series)
+                    .any(|series| series.id == *id && series.visible)
+        });
     if let Some(pos) = pointer.filter(|_| response.hovered()) {
         let cursor = if state
             .runtime
@@ -522,7 +532,7 @@ pub(crate) fn handle(
     }
     if let Some(mut drag) = state.runtime.drag.take() {
         if let Some(pos) = pos {
-            update_drag(state, config, &mut drag, pos, &mut events);
+            update_drag(state, config, &mut drag, pos, mods.shift, &mut events);
         }
         if released == Some(drag.button) {
             if drag.moved {
@@ -744,6 +754,47 @@ pub(crate) fn handle(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pan_changes_y_only_with_shift_or_from_the_gutter() {
+        let plot = Rect::from_min_max(Pos2::new(20.0, 0.0), Pos2::new(120.0, 100.0));
+        let axis = Axis {
+            range: [0.0, 100.0],
+            scale: Scale::Linear,
+            flip: false,
+        };
+        for (origin, shift_held, expect_y) in [
+            (Pos2::new(50.0, 50.0), false, false),
+            (Pos2::new(50.0, 50.0), true, true),
+            (Pos2::new(10.0, 50.0), false, true),
+        ] {
+            let mut state = ChartState::default();
+            let mut drag = Drag {
+                kind: Kind::Pan,
+                button: PointerButton::Secondary,
+                origin,
+                current: origin,
+                pane: 1,
+                plot,
+                x: axis,
+                y: axis,
+                selection: None,
+                before: View::default(),
+                moved: false,
+            };
+            let mut events = Events::default();
+            update_drag(
+                &mut state,
+                &ChartConfig::default(),
+                &mut drag,
+                origin + Vec2::new(10.0, 20.0),
+                shift_held,
+                &mut events,
+            );
+            assert!(state.x_view.is_some());
+            assert_eq!(state.y_views.contains_key(&1), expect_y);
+        }
+    }
     #[test]
     fn selection_hit_edges_and_reversed_axis() {
         let rect = Rect::from_min_max(Pos2::new(20.0, 0.0), Pos2::new(120.0, 40.0));

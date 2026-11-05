@@ -59,6 +59,9 @@ pub(crate) struct AnalysisWindow {
     /// Bumped whenever a result changes; overlays are rebuilt only then.
     revision: u64,
     applied: Option<(Tool, bool, bool, Option<u64>, u64)>,
+    /// The report for (series id, data generation, range bits); summaries of
+    /// long series are too costly to recompute every frame.
+    report: Option<((u64, u64, Option<[u64; 2]>), Vec<(&'static str, String)>)>,
 }
 
 struct FitOutput {
@@ -103,6 +106,7 @@ impl Default for AnalysisWindow {
             overlay: true,
             revision: 0,
             applied: None,
+            report: None,
         };
         window.reset_guesses();
         window
@@ -193,7 +197,15 @@ impl AnalysisWindow {
                     self.fatigue_ui(ui, series, range);
                     None
                 }
-                Tool::Report => report_ui(ui, series, range),
+                Tool::Report => {
+                    let key = (series.id, series.generation, range.map(|[a, b]| [a.to_bits(), b.to_bits()]));
+                    if self.report.as_ref().is_none_or(|(cached, _)| *cached != key) {
+                        let summary = summarize(&series.x, &series.y, range);
+                        self.report = Some((key, report_rows(&summary, &series.unit, series.datetime)));
+                    }
+                    let rows = self.report.as_ref().map_or(&[][..], |(_, rows)| rows.as_slice());
+                    report_ui(ui, &series.label, rows)
+                }
             };
         });
         self.open = open;
@@ -726,7 +738,7 @@ fn samples(series: &SeriesData, range: Option<[f64; 2]>) -> (Vec<f64>, Vec<f64>)
     series
         .x
         .iter()
-        .zip(&series.y)
+        .zip(series.y.iter())
         .filter(|(x, y)| {
             x.is_finite() && y.is_finite() && range.is_none_or(|[a, b]| **x >= a && **x <= b)
         })
@@ -736,18 +748,16 @@ fn samples(series: &SeriesData, range: Option<[f64; 2]>) -> (Vec<f64>, Vec<f64>)
 
 fn report_ui(
     ui: &mut egui::Ui,
-    series: &SeriesData,
-    range: Option<[f64; 2]>,
+    label: &str,
+    rows: &[(&'static str, String)],
 ) -> Option<AnalysisOutcome> {
-    let summary = summarize(&series.x, &series.y, range);
-    let rows = report_rows(&summary, &series.unit);
     let mut outcome = None;
     egui::ScrollArea::vertical()
         .max_height(420.0)
         .show(ui, |ui| {
             widgets::property_grid(ui, "report", |ui| {
-                for (label, value) in &rows {
-                    ui.label(*label);
+                for (name, value) in rows {
+                    ui.label(*name);
                     ui.label(value);
                     ui.end_row();
                 }
@@ -756,19 +766,23 @@ fn report_ui(
     if ui.button("Copy report").clicked() {
         let text: String = rows
             .iter()
-            .map(|(label, value)| format!("{label}\t{value}\n"))
+            .map(|(name, value)| format!("{name}\t{value}\n"))
             .collect();
-        ui.ctx().copy_text(format!("{}\n{text}", series.label));
+        ui.ctx().copy_text(format!("{label}\n{text}"));
         outcome = Some(AnalysisOutcome::Notify("Report copied".into()));
     }
     outcome
 }
 
-fn report_rows(s: &SignalSummary, unit: &str) -> Vec<(&'static str, String)> {
-    let v = |value: f64| dv_chart::format::format_value(value, unit, 6);
-    let n = |value: f64| dv_chart::format::format_value(value, "", 6);
-    vec![
-        ("Samples", s.n.to_string()),
+fn report_rows(s: &SignalSummary, unit: &str, datetime: bool) -> Vec<(&'static str, String)> {
+    use dv_chart::format::{format_duration, format_time, format_value};
+    let v = |value: f64| format_value(value, unit, 6);
+    let n = |value: f64| format_value(value, "", 6);
+    // Datetime X is epoch seconds: positions read as clock times, spans as durations.
+    let at = |value: f64| if datetime { format_time(value, 0.001) } else { n(value) };
+    let span = |value: f64| if datetime { format_duration(value, 0.001) } else { n(value) };
+    let mut rows = vec![
+        ("Samples", format_value(s.n as f64, "", 15)),
         ("Minimum", v(s.min)),
         ("Maximum", v(s.max)),
         ("Mean", v(s.mean)),
@@ -788,13 +802,21 @@ fn report_rows(s: &SignalSummary, unit: &str) -> Vec<(&'static str, String)> {
         ("Slope (least squares)", n(s.slope)),
         ("Integral", n(s.integral)),
         ("Integral mean", v(s.integral_mean)),
-        ("Integral of x·y", n(s.integral_x)),
-        ("Normalized integral of x·y", n(s.integral_x_normalized)),
-        ("Integral of x²·y", n(s.integral_x2)),
-        ("X at minimum", n(s.x_at_min)),
-        ("X at maximum", n(s.x_at_max)),
-        ("X span", n(s.duration)),
-        ("Mean sample spacing", n(s.mean_dt)),
+    ];
+    // Moments about x are meaningless for absolute timestamps.
+    if !datetime {
+        rows.extend([
+            ("Integral of x·y", n(s.integral_x)),
+            ("Normalized integral of x·y", n(s.integral_x_normalized)),
+            ("Integral of x²·y", n(s.integral_x2)),
+        ]);
+    }
+    rows.extend([
+        ("X at minimum", at(s.x_at_min)),
+        ("X at maximum", at(s.x_at_max)),
+        ("X span", span(s.duration)),
+        ("Mean sample spacing", span(s.mean_dt)),
         ("Turbulence intensity (std/mean)", n(s.ti)),
-    ]
+    ]);
+    rows
 }

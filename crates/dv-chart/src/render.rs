@@ -7,7 +7,7 @@ use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
 use crate::{
     canvas::{Anchor, Canvas, EguiCanvas, SvgCanvas},
-    decimate::M4Index,
+    decimate::{M4Index, XInfo},
     format, interaction,
     ticks::{self, Tick},
     AxisFormat, ChartConfig, ChartResponse, ChartState, ChartTheme, Dash, Draw, FontSet, Hover,
@@ -98,20 +98,24 @@ pub(crate) struct SeriesCache {
     len: usize,
     gap: Option<u64>,
     pub sorted: bool,
+    x_info: Arc<XInfo>,
     index: Arc<M4Index>,
     data: Vec<(DataKey, Arc<Vec<[f64; 2]>>)>,
     screen: Option<(ScreenKey, Arc<Vec<Pos2>>)>,
 }
 impl SeriesCache {
-    fn new(series: &Series<'_>, gap: Option<f64>) -> Self {
+    fn new(series: &Series<'_>, gap: Option<f64>, shared: Option<Arc<XInfo>>) -> Self {
+        let len = series.x.len().min(series.y.len());
+        let x_info = shared.unwrap_or_else(|| Arc::new(XInfo::new(&series.x[..len], gap)));
         Self {
             generation: series.generation,
             x_ptr: series.x.as_ptr() as usize,
             y_ptr: series.y.as_ptr() as usize,
             len: series.x.len().min(series.y.len()),
             gap: gap.map(f64::to_bits),
-            sorted: crate::decimate::is_sorted(&series.x[..series.x.len().min(series.y.len())]),
-            index: Arc::new(M4Index::new(series.x, series.y, gap)),
+            sorted: x_info.sorted,
+            index: Arc::new(M4Index::with_x_info(series.x, series.y, &x_info)),
+            x_info,
             data: Vec::new(),
             screen: None,
         }
@@ -180,11 +184,18 @@ fn cache<'a>(
     series: &Series<'_>,
     gap: Option<f64>,
 ) -> &'a mut SeriesCache {
-    let entry = caches
-        .entry(series.id)
-        .or_insert_with(|| SeriesCache::new(series, gap));
+    cache_with_x_info(caches, series, gap, None)
+}
+fn cache_with_x_info<'a>(
+    caches: &'a mut HashMap<SeriesId, SeriesCache>,
+    series: &Series<'_>,
+    gap: Option<f64>,
+    shared: Option<Arc<XInfo>>,
+) -> &'a mut SeriesCache {
+    let entry = caches.entry(series.id);
+    let entry = entry.or_insert_with(|| SeriesCache::new(series, gap, shared.clone()));
     if !entry.matches(series, gap) {
-        *entry = SeriesCache::new(series, gap);
+        *entry = SeriesCache::new(series, gap, shared);
     }
     entry
 }
@@ -205,6 +216,7 @@ pub(crate) struct PaneLayout {
     pub x: Axis,
     pub y: Axis,
     pub full_x: [f64; 2],
+    all_hidden: bool,
     y_ticks: Vec<Tick>,
     x_ticks: Vec<Tick>,
     pub legend: Vec<LegendBox>,
@@ -424,6 +436,7 @@ fn layout(
     state: &mut ChartState,
     panes: &[Pane<'_>],
     config: &ChartConfig<'_>,
+    marks: &[Mark],
     rect: Rect,
     theme: &ChartTheme,
 ) -> Layout {
@@ -435,7 +448,22 @@ fn layout(
     for pane in panes {
         for series in &pane.series {
             if series.visible {
-                cache(&mut state.runtime.caches, series, config.gap_factor);
+                let needs_index = state.runtime.caches.get(&series.id)
+                    .is_none_or(|cached| !cached.matches(series, config.gap_factor));
+                let shared = needs_index.then(|| {
+                    panes.iter().flat_map(|pane| &pane.series).find_map(|other| {
+                        if other.id == series.id
+                            || other.x.as_ptr() != series.x.as_ptr()
+                            || other.x.len().min(other.y.len()) != series.x.len().min(series.y.len())
+                        {
+                            return None;
+                        }
+                        state.runtime.caches.get(&other.id)
+                            .filter(|cached| cached.matches(other, config.gap_factor))
+                            .map(|cached| Arc::clone(&cached.x_info))
+                    })
+                }).flatten();
+                cache_with_x_info(&mut state.runtime.caches, series, config.gap_factor, shared);
             }
         }
     }
@@ -509,6 +537,11 @@ fn layout(
             config.x_scale,
             config.x_flip,
         );
+        let all_hidden = !pane.series.is_empty()
+            && pane
+                .series
+                .iter()
+                .all(|series| !series.visible || state.hidden.contains(&series.id));
         let mut yrange = [f64::INFINITY, f64::NEG_INFINITY];
         for series in &pane.series {
             if !series.visible || state.hidden.contains(&series.id) {
@@ -528,7 +561,20 @@ fn layout(
                 extent_union(&mut yrange, bounds);
             }
         }
-        let auto_y = expand_range(yrange[0], yrange[1], pane.y_scale, 0.05, pane.include_zero);
+        for mark in marks {
+            if let Mark::HLine { pane: id, y, .. } = mark {
+                if *id == pane.id && y.is_finite() && (pane.y_scale != Scale::Log10 || *y > 0.0) {
+                    extent_union(&mut yrange, [*y, *y]);
+                }
+            }
+        }
+        let auto_y = if pane.y_scale == Scale::Linear
+            && matches!(&pane.y_format, AxisFormat::Category(labels) if labels.len() == 2)
+        {
+            [-0.1, 1.1]
+        } else {
+            expand_range(yrange[0], yrange[1], pane.y_scale, 0.05, pane.include_zero)
+        };
         let y = axis_for(
             state
                 .y_views
@@ -547,20 +593,24 @@ fn layout(
                 .unwrap_or(pane.weight)
                 .max(0.05)
             / total_weight;
-        let y_ticks = ticks::axis_ticks(
-            y.range[0],
-            y.range[1],
-            y_tick_target(h - 24.0),
-            &pane.y_format,
-            pane.y_scale,
-        );
+        let y_ticks = if all_hidden {
+            Vec::new()
+        } else {
+            ticks::axis_ticks(
+                y.range[0],
+                y.range[1],
+                y_tick_target(h - 24.0),
+                &pane.y_format,
+                pane.y_scale,
+            )
+        };
         for tick in &y_ticks {
             if !tick.label.is_empty() {
                 gutter =
                     gutter.max(canvas.measure_text(&tick.label, theme.font_size, false).x + 17.0);
             }
         }
-        prepared.push((pane, local_full, x, y, h, y_ticks));
+        prepared.push((pane, local_full, x, y, h, y_ticks, all_hidden));
     }
     gutter = gutter.min((rect.width() * 0.35).max(34.0));
     let left = rect.left() + gutter;
@@ -569,7 +619,9 @@ fn layout(
     let mut pane_layouts = Vec::with_capacity(panes.len());
     let mut dividers = Vec::new();
     let prepared_len = prepared.len();
-    for (i, (pane, local_full, mut x, mut y, h, mut y_ticks)) in prepared.into_iter().enumerate() {
+    for (i, (pane, local_full, mut x, mut y, h, mut y_ticks, all_hidden)) in
+        prepared.into_iter().enumerate()
+    {
         let pane_rect = Rect::from_min_max(Pos2::new(left, y_top), Pos2::new(right, y_top + h));
         // Leave room for the hover actions at the right of the header strip.
         let legend_area = if pane_rect.width() > 520.0 {
@@ -596,7 +648,7 @@ fn layout(
                 x.range = [mid - span * 0.5, mid + span * 0.5];
             }
         }
-        if header > 0.0 || config.equal_aspect {
+        if !all_hidden && (header > 0.0 || config.equal_aspect) {
             y_ticks = ticks::axis_ticks(
                 y.range[0],
                 y.range[1],
@@ -619,6 +671,7 @@ fn layout(
             x,
             y,
             full_x: local_full,
+            all_hidden,
             y_ticks,
             x_ticks,
             legend,
@@ -983,6 +1036,16 @@ fn draw(
                 }
             }
         }
+        if pl.all_hidden {
+            canvas.text(
+                pl.plot.center(),
+                Anchor::CenterCenter,
+                "Hidden — click the legend to show",
+                theme.font_size,
+                theme.text_muted,
+                false,
+            );
+        }
         if let Some(box_rect) = state.runtime.box_rect().filter(|r| r.intersects(pl.plot)) {
             let r = box_rect.intersect(pl.plot);
             canvas.fill_rect(r, 0.0, theme.selection_fill);
@@ -1169,10 +1232,38 @@ fn draw(
         }
     }
     if let Some(last) = layout.panes.last() {
+        let hover_pill = if config.crosshair {
+            hover.and_then(|h| {
+                let x = last.x.x(last.plot, h.x)?;
+                let label = x_readout(h.x, config);
+                let width = canvas.measure_text(&label, theme.font_size, false).x + 12.0;
+                let pos = Pos2::new(
+                    (x - width * 0.5).clamp(
+                        last.plot.left(),
+                        (last.plot.right() - width).max(last.plot.left()),
+                    ),
+                    layout.x_axis.top() + 3.0,
+                );
+                let rect = Rect::from_min_size(pos, Vec2::new(width, theme.font_size + 8.0));
+                Some((label, pos, rect))
+            })
+        } else {
+            None
+        };
         for tick in &last.x_ticks {
             if !tick.label.is_empty() {
                 if let Some(x) = last.x.x(last.plot, tick.value) {
-                    if x >= last.plot.left() - 1.0 && x <= last.plot.right() + 1.0 {
+                    let size = canvas.measure_text(&tick.label, theme.font_size, false);
+                    let tick_rect = Rect::from_min_size(
+                        Pos2::new(x - size.x * 0.5, layout.x_axis.top() + 8.0),
+                        size,
+                    );
+                    if x >= last.plot.left() - 1.0
+                        && x <= last.plot.right() + 1.0
+                        && hover_pill
+                            .as_ref()
+                            .is_none_or(|(_, _, pill)| !pill.intersects(tick_rect))
+                    {
                         canvas.text(
                             Pos2::new(x, layout.x_axis.top() + 8.0),
                             Anchor::CenterTop,
@@ -1195,27 +1286,15 @@ fn draw(
                 false,
             );
         }
-        if config.crosshair {
-            if let Some(h) = hover {
-                if let Some(x) = last.x.x(last.plot, h.x) {
-                    let label = x_readout(h.x, config);
-                    let w = canvas.measure_text(&label, theme.font_size, false).x + 12.0;
-                    pill(
-                        canvas,
-                        Pos2::new(
-                            (x - w * 0.5).clamp(
-                                last.plot.left(),
-                                (last.plot.right() - w).max(last.plot.left()),
-                            ),
-                            layout.x_axis.top() + 3.0,
-                        ),
-                        &label,
-                        theme.axis_line,
-                        theme.text,
-                        theme.font_size,
-                    );
-                }
-            }
+        if let Some((label, pos, _)) = hover_pill {
+            pill(
+                canvas,
+                pos,
+                &label,
+                theme.axis_line,
+                theme.text,
+                theme.font_size,
+            );
         }
     }
     if let Some(rect) = layout.overview {
@@ -1462,13 +1541,14 @@ pub(crate) fn show(
     marks: &[Mark],
     theme: &ChartTheme,
 ) -> ChartResponse {
+    let perf_start = std::time::Instant::now();
     let available = ui.available_size_before_wrap();
     let (rect, response) = ui.allocate_exact_size(
         Vec2::new(available.x.max(80.0), available.y.max(80.0)),
         Sense::click_and_drag(),
     );
     let mut canvas = EguiCanvas::new(ui.painter().clone());
-    let layout = layout(&mut canvas, state, panes, config, rect, theme);
+    let layout = layout(&mut canvas, state, panes, config, marks, rect, theme);
     let events = interaction::handle(ui, state, panes, config, &layout, &response);
     let pointer = ui
         .ctx()
@@ -1486,6 +1566,13 @@ pub(crate) fn show(
         hover.as_ref(),
         pointer,
     );
+    if let Ok(path) = std::env::var("DV_PROFILE") {
+        use std::io::Write as _;
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let row = format!("chart\t{:.3}\t{}\t{}\n", perf_start.elapsed().as_secs_f64() * 1000.0, panes.iter().map(|pane| pane.series.len()).sum::<usize>(), hover.is_some());
+            let _ = file.write_all(row.as_bytes());
+        }
+    }
     ChartResponse {
         hover,
         clicked: events.clicked,
@@ -1511,7 +1598,7 @@ pub(crate) fn svg(
     let mut canvas = SvgCanvas::new(size, fonts);
     let mut state = state.clone();
     let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(size[0], size[1]));
-    let layout = layout(&mut canvas, &mut state, panes, config, rect, theme);
+    let layout = layout(&mut canvas, &mut state, panes, config, marks, rect, theme);
     draw(
         &mut canvas,
         &mut state,

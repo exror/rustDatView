@@ -1,7 +1,9 @@
 pub(crate) mod chart_view;
 pub(crate) mod dialogs;
+pub(crate) mod fields_view;
 pub(crate) mod icons;
 pub(crate) mod info_view;
+pub(crate) mod inspector;
 pub(crate) mod mode_bar;
 pub(crate) mod sidebar;
 pub(crate) mod stats_dock;

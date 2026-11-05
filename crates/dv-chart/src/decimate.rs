@@ -138,6 +138,25 @@ impl Gap {
     }
 }
 
+/// Properties depending only on a paired X slice, shared by series that use it.
+#[derive(Clone, Debug)]
+pub(crate) struct XInfo {
+    len: usize,
+    gap_factor: Option<f64>,
+    gap: Option<Gap>,
+    pub sorted: bool,
+}
+impl XInfo {
+    pub fn new(x: &[f64], gap_factor: Option<f64>) -> Self {
+        Self {
+            len: x.len(),
+            gap_factor,
+            gap: Gap::from_x(x, gap_factor),
+            sorted: is_sorted(x),
+        }
+    }
+}
+
 /// Reusable M4 range-extrema index for a single series generation.
 ///
 /// Construction is linear in the number of paired samples. For monotonic x,
@@ -171,7 +190,16 @@ impl M4Index {
     /// Builds an index over the paired prefix of `x` and `y`.
     pub fn new(x: &[f64], y: &[f64], gap_factor: Option<f64>) -> Self {
         let len = x.len().min(y.len());
-        let gap = Gap::from_x(&x[..len], gap_factor);
+        let info = XInfo::new(&x[..len], gap_factor);
+        Self::with_x_info(x, y, &info)
+    }
+
+    pub(crate) fn with_x_info(x: &[f64], y: &[f64], info: &XInfo) -> Self {
+        let len = x.len().min(y.len());
+        if len != info.len {
+            return Self::new(x, y, info.gap_factor);
+        }
+        let gap = info.gap;
         let mut runs = Vec::new();
         let mut positive_runs = Vec::new();
         let mut run_start = None;
@@ -255,7 +283,7 @@ impl M4Index {
 
         Self {
             len,
-            gap_factor,
+            gap_factor: info.gap_factor,
             ordered,
             runs,
             positive_runs,
@@ -629,7 +657,7 @@ impl PixelScale {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_sorted, m4, M4Index};
+    use super::{is_sorted, m4, M4Index, XInfo};
 
     fn assert_points(actual: &[[f64; 2]], expected: &[[f64; 2]]) {
         assert_eq!(actual.len(), expected.len(), "actual: {actual:?}");
@@ -653,6 +681,26 @@ mod tests {
         assert!(!is_sorted(&[f64::NAN]));
         assert!(!is_sorted(&[0.0, f64::INFINITY]));
         assert!(!is_sorted(&[f64::NEG_INFINITY, 0.0]));
+    }
+
+    #[test]
+    fn shared_x_metadata_preserves_each_series_breaks_and_extrema() {
+        let x = [0., 1., 2., 9., 10.];
+        let a = [1., 3., f64::NAN, 2., 4.];
+        let b = [5., 2., 8., 1., 7.];
+        let info = XInfo::new(&x, Some(2.0));
+        for y in [&a[..], &b[..]] {
+            let shared = M4Index::with_x_info(&x, y, &info);
+            let independent = M4Index::new(&x, y, Some(2.0));
+            assert_points(
+                &shared.query(&x, y, 0.0, 10.0, 3),
+                &independent.query(&x, y, 0.0, 10.0, 3),
+            );
+            assert_eq!(
+                shared.y_bounds(&x, y, 0.0, 10.0),
+                independent.y_bounds(&x, y, 0.0, 10.0)
+            );
+        }
     }
 
     #[test]

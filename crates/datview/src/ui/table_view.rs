@@ -67,7 +67,7 @@ impl TableView {
                         }
                     });
             }
-            ui.allocate_ui(egui::vec2(300.0, 30.0), |ui| {
+            ui.allocate_ui(egui::vec2(ui.available_width().min(300.0), 30.0), |ui| {
                 super::widgets::search_field(ui, &mut self.search, "Find a column…");
             });
         });
@@ -101,17 +101,24 @@ impl TableView {
         }
 
         let row_count = self.rows.as_ref().map_or(table.data.nrows(), Vec::len);
-        let has_index = table
-            .data
-            .columns()
-            .first()
-            .is_some_and(|column| crate::selection::is_index(&column.name));
+        let has_index = self.columns.contains(&0)
+            && table
+                .data
+                .columns()
+                .first()
+                .is_some_and(|column| crate::selection::is_index(&column.name));
         ui.label(
             RichText::new(format!(
-                "{} rows  ·  {} of {} columns",
+                "{} {}  ·  {} of {} {}",
                 count(row_count),
-                self.columns.len(),
-                table.data.ncols()
+                if row_count == 1 { "row" } else { "rows" },
+                count(self.columns.len()),
+                count(table.data.ncols()),
+                if table.data.ncols() == 1 {
+                    "column"
+                } else {
+                    "columns"
+                }
             ))
             .size(11.5)
             .color(tokens.text_muted),
@@ -229,7 +236,13 @@ impl TableView {
                                 let column = table.data.column(index);
                                 row.col(|ui| match &column.data {
                                     ColumnData::Float(values) => {
-                                        ui.label(format_float(values[raw_row]));
+                                        let value = values[raw_row];
+                                        if value.is_nan() {
+                                            ui.label(RichText::new("—").color(tokens.text_muted))
+                                                .on_hover_text("Missing value");
+                                        } else {
+                                            ui.label(format_float(value));
+                                        }
                                     }
                                     ColumnData::DateTime(values) => {
                                         ui.label(format_datetime(values[raw_row]));
@@ -238,7 +251,9 @@ impl TableView {
                                         ui.with_layout(
                                             egui::Layout::left_to_right(egui::Align::Center),
                                             |ui| {
-                                                ui.label(values[raw_row].as_str());
+                                                let value = values[raw_row].as_str();
+                                                ui.add(egui::Label::new(value).truncate())
+                                                    .on_hover_text(value);
                                             },
                                         );
                                     }

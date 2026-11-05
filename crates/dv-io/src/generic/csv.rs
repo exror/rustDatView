@@ -248,6 +248,116 @@ fn has_unit(name: &str) -> bool {
     (name.ends_with(']') && name.contains('[')) || (name.ends_with(')') && name.contains('('))
 }
 
+// Some established logging schemas define units in sensor IDs or field names
+// rather than in the displayed column header. Only apply these mappings when
+// enough identifying fields are present to distinguish the schema.
+fn infer_schema_units(names: &mut [String], header: &[String], sensor_ids: Option<&[&str]>) {
+    let has = |name: &str| header.iter().any(|field| field.eq_ignore_ascii_case(name));
+    let lhm = sensor_ids.is_some_and(|ids| {
+        ids.len() >= names.len()
+            && ids.iter().filter(|id| unquote(id).starts_with('/')).count() >= 2
+    });
+    let ptat = has("Timestamp") && has("Device") && has("CFreq") && has("UFreq") && has("TStat");
+    let turbo = has("Time_Of_Day_Seconds") && has("Bzy_MHz") && has("PkgWatt");
+    let presentmon = has("Application") && has("TimeInSeconds") && has("msBetweenPresents");
+    let joulescope = ["#time", "current", "voltage", "power", "charge", "energy"]
+        .iter()
+        .all(|name| has(name));
+    let nvidia = has("timestamp") && has("temperature.gpu") && has("power.draw [W]");
+    for (index, (name, raw)) in names.iter_mut().zip(header).enumerate() {
+        let unit = if lhm {
+            sensor_ids
+                .and_then(|ids| ids.get(index))
+                .and_then(|id| unquote(id).rsplit('/').nth(1))
+                .and_then(|kind| match kind.to_ascii_lowercase().as_str() {
+                    "power" => Some("W"),
+                    "temperature" => Some("°C"),
+                    "load" => Some("%"),
+                    "clock" => Some("MHz"),
+                    "voltage" => Some("V"),
+                    "current" => Some("A"),
+                    "fan" => Some("RPM"),
+                    _ => None,
+                })
+        } else if ptat {
+            match raw.as_str() {
+                "CFreq" | "UFreq" => Some("MHz"),
+                "Util" | "C0" | "C1" | "C6" => Some("%"),
+                "Temp" => Some("°C"),
+                "Power" => Some("W"),
+                "Volt" => Some("V"),
+                _ => None,
+            }
+        } else if turbo {
+            match raw.as_str() {
+                "Avg_MHz" | "Bzy_MHz" | "TSC_MHz" => Some("MHz"),
+                "Busy%" | "CPU%c1" | "CPU%c6" => Some("%"),
+                "CoreTmp" | "PkgTmp" => Some("°C"),
+                "PkgWatt" => Some("W"),
+                _ => None,
+            }
+        } else if presentmon {
+            if raw == "TimeInSeconds" {
+                Some("s")
+            } else if raw.starts_with("ms") {
+                Some("ms")
+            } else if matches!(raw.as_str(), "AllowsTearing" | "Dropped") {
+                Some("Yes/No")
+            } else {
+                None
+            }
+        } else if joulescope {
+            match raw.as_str() {
+                "#time" => Some("s"),
+                "current" => Some("A"),
+                "voltage" => Some("V"),
+                "power" => Some("W"),
+                "charge" => Some("A·s"),
+                "energy" => Some("J"),
+                _ => None,
+            }
+        } else if nvidia && raw.eq_ignore_ascii_case("temperature.gpu") {
+            Some("°C")
+        } else {
+            None
+        };
+        if let Some(unit) = unit {
+            *name = append_unit(name, unit);
+        }
+    }
+}
+
+fn sequence_timebase(
+    sample: &[Vec<&str>],
+    header_index: Option<usize>,
+    units_index: Option<usize>,
+    offset: usize,
+    data_width: usize,
+) -> Option<(usize, f64, f64)> {
+    let header = sample.get(header_index?)?;
+    let units = sample.get(units_index?)?;
+    let x = (offset..data_width).find(|&i| {
+        header
+            .get(i)
+            .is_some_and(|s| unquote(s).eq_ignore_ascii_case("X"))
+            && units
+                .get(i)
+                .is_some_and(|s| unquote(s).eq_ignore_ascii_case("Sequence"))
+    })?;
+    let value = |key: &str| {
+        let i = header
+            .iter()
+            .position(|s| unquote(s).eq_ignore_ascii_case(key))?;
+        match parse(unquote(units.get(i)?), false) {
+            Value::Number(value, _) if value.is_finite() => Some(value),
+            _ => None,
+        }
+    };
+    let start = value("Start")?;
+    let increment = value("Increment")?;
+    (increment != 0.0).then_some((x - offset, start, increment))
+}
+
 fn unique_names(names: &mut [String]) -> usize {
     let mut used = HashSet::new();
     let mut changed = 0;
@@ -291,6 +401,32 @@ fn same_header(fields: &[&str], header: &[String], offset: usize, trailing: bool
             .iter()
             .zip(header)
             .all(|(a, b)| unquote(a) == b)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RowKind {
+    Data,
+    Empty,
+    RepeatedHeader,
+    SensorGroup,
+}
+
+fn row_kind(
+    fields: &[&str],
+    header: &[String],
+    offset: usize,
+    trailing: bool,
+    has_date_time_pair: bool,
+) -> RowKind {
+    if fields.is_empty() {
+        RowKind::Empty
+    } else if !header.is_empty() && same_header(fields, header, offset, trailing) {
+        RowKind::RepeatedHeader
+    } else if has_date_time_pair && unquote(fields[0]).starts_with("Sensor Group:") {
+        RowKind::SensorGroup
+    } else {
+        RowKind::Data
+    }
 }
 
 struct Numeric {
@@ -401,16 +537,22 @@ pub fn read_with_options(
     }
     let decimal_comma = separator == b';';
     let skipped: HashSet<usize> = options.comment_lines.iter().copied().collect();
-    let records: Vec<_> = all_records
-        .iter()
-        .copied()
-        .filter(|record| {
-            !skipped.contains(&record.line)
-                && !without_comment(record.text, options.comment_char)
-                    .trim()
-                    .is_empty()
-        })
-        .collect();
+    let records: Cow<'_, [Record<'_>]> = if skipped.is_empty() && options.comment_char.is_none() {
+        Cow::Borrowed(&all_records)
+    } else {
+        Cow::Owned(
+            all_records
+                .iter()
+                .copied()
+                .filter(|record| {
+                    !skipped.contains(&record.line)
+                        && !without_comment(record.text, options.comment_char)
+                            .trim()
+                            .is_empty()
+                })
+                .collect(),
+        )
+    };
     if records.is_empty() {
         return Err(IoError::WrongFormat(
             "Delimited file has no data records".into(),
@@ -600,6 +742,15 @@ pub fn read_with_options(
             }
         }
     }
+    if !explicit_names {
+        let sensor_ids = header_index
+            .and_then(|h| h.checked_sub(1))
+            .and_then(|h| sample.get(h))
+            .map(Vec::as_slice);
+        infer_schema_units(&mut names, &raw_header, sensor_ids);
+    }
+    let sequence_timebase =
+        sequence_timebase(&sample, header_index, units_index, offset, data_width);
     for (i, name) in names.iter_mut().enumerate() {
         if name.trim().is_empty() {
             *name = format!("C{i}");
@@ -652,7 +803,7 @@ pub fn read_with_options(
     let mut long_rows = 0usize;
     let mut repeated = 0usize;
     let mut groups = Vec::new();
-    let mut kept = Vec::with_capacity(capacity);
+    let mut kept = 0usize;
     let mut fields = Vec::with_capacity(names.len() + offset + 1);
     for record in records.iter().skip(data_start) {
         fields.clear();
@@ -660,16 +811,23 @@ pub fn read_with_options(
             without_comment(record.text, options.comment_char),
             separator,
         ));
-        if fields.is_empty() {
-            continue;
-        }
-        if !raw_header.is_empty() && same_header(&fields, &raw_header, offset, trailing) {
-            repeated += 1;
-            continue;
-        }
-        if date_time_pair.is_some() && unquote(fields[0]).starts_with("Sensor Group:") {
-            groups.push(record.text.to_owned());
-            continue;
+        match row_kind(
+            &fields,
+            &raw_header,
+            offset,
+            trailing,
+            date_time_pair.is_some(),
+        ) {
+            RowKind::Empty => continue,
+            RowKind::RepeatedHeader => {
+                repeated += 1;
+                continue;
+            }
+            RowKind::SensorGroup => {
+                groups.push(record.text.to_owned());
+                continue;
+            }
+            RowKind::Data => {}
         }
         if trailing && fields.last().is_some_and(|v| unquote(v).is_empty()) {
             fields.pop();
@@ -686,21 +844,15 @@ pub fn read_with_options(
                 let i = builders.len();
                 names.push(format!("C{i}"));
                 let sample = fields.get(offset + i).map_or("", |s| unquote(s));
-                builders.push(Builder::new(
-                    sample,
-                    false,
-                    decimal_comma,
-                    capacity,
-                    kept.len(),
-                ));
+                builders.push(Builder::new(sample, false, decimal_comma, capacity, kept));
             }
         }
         for (i, builder) in builders.iter_mut().enumerate() {
             builder.push(fields.get(offset + i).copied().unwrap_or(""), decimal_comma);
         }
-        kept.push(*record);
+        kept += 1;
     }
-    if kept.is_empty() {
+    if kept == 0 {
         return Err(IoError::WrongFormat(
             "Delimited file has no data rows".into(),
         ));
@@ -718,16 +870,24 @@ pub fn read_with_options(
         .collect();
     let mixed_columns = invalid.len();
     if !invalid.is_empty() {
-        let mut values: Vec<Vec<String>> = invalid
-            .iter()
-            .map(|_| Vec::with_capacity(kept.len()))
-            .collect();
-        for record in &kept {
+        let mut values: Vec<Vec<String>> =
+            invalid.iter().map(|_| Vec::with_capacity(kept)).collect();
+        for record in records.iter().skip(data_start) {
             fields.clear();
             fields.extend(Fields::new(
                 without_comment(record.text, options.comment_char),
                 separator,
             ));
+            if row_kind(
+                &fields,
+                &raw_header,
+                offset,
+                trailing,
+                date_time_pair.is_some(),
+            ) != RowKind::Data
+            {
+                continue;
+            }
             for (column, rows) in invalid.iter().zip(&mut values) {
                 rows.push(
                     fields
@@ -840,6 +1000,18 @@ pub fn read_with_options(
             }
         };
         columns.push(Column::new(name, data));
+    }
+    if merged_indices.is_none() {
+        if let Some((index, start, increment)) = sequence_timebase {
+            if let Some(ColumnData::Float(values)) = columns.get(index).map(|column| &column.data) {
+                let time = values
+                    .iter()
+                    .map(|value| start + value * increment)
+                    .collect();
+                columns.insert(0, Column::float("Time [s]", time));
+                notes.push("Derived time from sequence, start and increment".to_owned());
+            }
+        }
     }
     let mut final_names: Vec<_> = columns.iter().map(|c| c.name.clone()).collect();
     let unique = unique_names(&mut final_names);
