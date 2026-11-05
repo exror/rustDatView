@@ -146,10 +146,20 @@ fn priority(family: UnitFamily, name: &str) -> usize {
     }
 }
 
+/// A unit-less column counting samples (0, 1, 2, …), as oscilloscopes write
+/// next to the time base: it is a row number, not a measurement.
+fn counter_like(column: &Column) -> bool {
+    if !split_name_unit(&column.name).1.trim().is_empty() {
+        return false;
+    }
+    let Some(values) = column.floats() else { return false };
+    values.len() > 2 && values.windows(2).all(|pair| pair[1] - pair[0] == 1.0)
+}
+
 /// Small tables show every usable numeric signal. Large telemetry tables pick
 /// one representative from power, frequency and temperature. Identifier
-/// columns (core numbers, device indices) are skipped when anything else is
-/// available.
+/// columns (core numbers, device indices) and sample counters are skipped
+/// when anything else is available.
 pub(crate) fn default_ys(table: &Table, x: usize) -> Vec<usize> {
     let columns = table.data.columns();
     let mut usable: Vec<_> = columns
@@ -161,8 +171,9 @@ pub(crate) fn default_ys(table: &Table, x: usize) -> Vec<usize> {
                 && c.floats().is_some_and(|v| v.iter().any(|n| n.is_finite()))
         })
         .collect();
-    if usable.iter().any(|(_, c)| !identifier_like(c)) {
-        usable.retain(|(_, c)| !identifier_like(c));
+    let bookkeeping = |c: &Column| identifier_like(c) || counter_like(c);
+    if usable.iter().any(|(_, c)| !bookkeeping(c)) {
+        usable.retain(|(_, c)| !bookkeeping(c));
     }
     let numeric_count = columns
         .iter()
@@ -204,14 +215,55 @@ pub(crate) fn default_ys(table: &Table, x: usize) -> Vec<usize> {
         }
     }
     if telemetry && !picks.is_empty() {
-        picks
-    } else {
-        usable
-            .into_iter()
-            .find(|(_, c)| time_priority(&c.name).is_none())
-            .map(|(i, _)| vec![i])
-            .unwrap_or_default()
+        return picks;
     }
+    // Other logs (PresentMon, scopes, analyzers): up to three varying signals
+    // from different quantities. Flags and constant columns say little on
+    // their own, so they are skipped when something else is available.
+    let family_rank = |family: UnitFamily| match family {
+        UnitFamily::Power => 0,
+        UnitFamily::Frequency => 1,
+        UnitFamily::Temperature => 2,
+        UnitFamily::FrameRate => 3,
+        UnitFamily::Time => 4,
+        UnitFamily::Percent => 5,
+        UnitFamily::Voltage => 6,
+        UnitFamily::Current => 7,
+        UnitFamily::Boolean => 100,
+        _ => 50,
+    };
+    let varying = |column: &Column| {
+        column.floats().is_some_and(|values| {
+            let mut finite = values.iter().copied().filter(|v| v.is_finite());
+            finite.next().is_some_and(|first| finite.any(|v| v != first))
+        })
+    };
+    let mut candidates: Vec<_> = usable
+        .iter()
+        .filter(|(_, c)| time_priority(&c.name).is_none())
+        .map(|(i, c)| {
+            let family = parse_unit(&split_name_unit(&c.name).1).family;
+            let rank = family_rank(family) + if varying(c) { 0 } else { 200 };
+            // Frame pacing logs: the frame time is the headline signal.
+            let name = compact(&c.name);
+            let headline = name.contains("betweenpresents") || name.contains("frametime");
+            (rank, !headline, *i, family)
+        })
+        .collect();
+    candidates.sort_by_key(|(rank, secondary, index, _)| (*rank, *secondary, *index));
+    let candidates: Vec<_> = candidates.into_iter().map(|(rank, _, index, family)| (rank, index, family)).collect();
+    let mut picks: Vec<usize> = Vec::new();
+    let mut families = Vec::new();
+    for (rank, index, family) in &candidates {
+        if picks.len() == 3 || (!picks.is_empty() && *rank >= 100) {
+            break;
+        }
+        if !families.contains(family) {
+            families.push(*family);
+            picks.push(*index);
+        }
+    }
+    picks
 }
 
 #[cfg(test)]

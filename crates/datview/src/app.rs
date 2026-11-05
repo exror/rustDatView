@@ -1795,7 +1795,11 @@ fn sampling_summary(workspace: &Workspace) -> Option<(f64, f64)> {
 }
 
 fn format_duration(seconds: f64) -> String {
-    let seconds = seconds.round().max(0.0) as u64;
+    // Captures shorter than a second (oscilloscopes) keep their scale.
+    if seconds < 1.0 {
+        return dv_chart::format::format_value(seconds.max(0.0), "s", 3);
+    }
+    let seconds = seconds.round() as u64;
     let hours = seconds / 3600;
     let minutes = seconds % 3600 / 60;
     let remainder = seconds % 60;

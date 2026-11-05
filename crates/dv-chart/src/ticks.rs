@@ -4,7 +4,7 @@ use chrono::{DateTime, Datelike, NaiveDate};
 
 use crate::format::{
     date_at, duration_style, format_duration_with_style, format_time, format_time_with_date,
-    format_value,
+    format_value, DurationStyle,
 };
 use crate::{AxisFormat, Scale};
 
@@ -402,6 +402,24 @@ fn label_ticks(
                 match format {
                     AxisFormat::Number if logarithmic => log_label(value, precision),
                     AxisFormat::Number => format_value(value, "", precision),
+                    // Sub-second axes read better in ms/µs/ns (200 µs) than as
+                    // fractions of a second (0.0002 s). One prefix serves the
+                    // whole axis so labels stay comparable.
+                    AxisFormat::Duration
+                        if duration_style == DurationStyle::Seconds && duration_max < 1.0 && !logarithmic =>
+                    {
+                        let (scale, unit) = if duration_max >= 1e-3 {
+                            (1e-3, "ms")
+                        } else if duration_max >= 1e-6 {
+                            (1e-6, "µs")
+                        } else {
+                            (1e-9, "ns")
+                        };
+                        let decimals = (-(label_step / scale).log10()).ceil().clamp(0.0, 9.0) as usize;
+                        let scaled = value / scale;
+                        let scaled = if scaled.abs() < label_step / scale * 1e-6 { 0.0 } else { scaled };
+                        format!("{scaled:.decimals$} {unit}")
+                    }
                     AxisFormat::Duration => {
                         format_duration_with_style(value, label_step, duration_style)
                     }
@@ -775,5 +793,12 @@ mod tests {
             ["0:00", "0:15", "0:30", "0:45", "1:00", "1:15", "1:30", "1:45", "2:00"]
         );
         assert_eq!(labels(7200.0, 3), ["0:00:00", "1:00:00", "2:00:00"]);
+        // Oscilloscope captures: one SI prefix for the whole axis.
+        let scope: Vec<_> = axis_ticks(-0.0005, 0.0005, 5, &AxisFormat::Duration, Scale::Linear)
+            .into_iter()
+            .map(|tick| tick.label)
+            .collect();
+        assert_eq!(scope, ["-500 µs", "0 µs", "500 µs"]);
+        assert_eq!(labels(0.002, 4), ["0 ms", "1 ms", "2 ms"]);
     }
 }

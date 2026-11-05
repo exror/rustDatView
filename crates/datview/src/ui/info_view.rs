@@ -137,7 +137,7 @@ impl InfoView {
                                 property(
                                     ui,
                                     "Duration",
-                                    &dv_chart::format::format_duration(duration, 0.001),
+                                    &dv_chart::format::format_elapsed(duration, 4),
                                 );
                             }
                             property(

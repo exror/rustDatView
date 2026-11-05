@@ -769,7 +769,7 @@ fn color_dim(color: Color32, dim: bool) -> Color32 {
 fn x_readout(x: f64, config: &ChartConfig<'_>) -> String {
     match &config.x_format {
         AxisFormat::DateTime => format::format_time_with_date(x, 0.001),
-        AxisFormat::Duration => format::format_duration(x, 0.001),
+        AxisFormat::Duration => format::format_elapsed(x, config.precision.max(5)),
         AxisFormat::Category(categories) if x >= 0.0 && x.is_finite() => categories
             .get(x.round() as usize)
             .cloned()

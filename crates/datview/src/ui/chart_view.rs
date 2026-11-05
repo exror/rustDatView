@@ -779,7 +779,7 @@ pub(crate) fn x_axis_format(workspace: &Workspace) -> (AxisFormat, bool) {
 pub(crate) fn x_readout(workspace: &Workspace, x: f64, precision: usize) -> String {
     match x_axis_format(workspace).0 {
         AxisFormat::DateTime => dv_chart::format::format_time(x, 0.001),
-        AxisFormat::Duration => dv_chart::format::format_duration(x, 0.001),
+        AxisFormat::Duration => dv_chart::format::format_elapsed(x, precision.max(5)),
         _ => {
             let unit = workspace.x_key.as_ref()
                 .and_then(|key| workspace.channels.iter().find(|channel| &channel.key == key))

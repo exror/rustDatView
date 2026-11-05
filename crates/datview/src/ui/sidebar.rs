@@ -245,7 +245,11 @@ fn source_summary(table: &Table, x_key: Option<&str>, precision: usize) -> Strin
         let rate = (last_index - first_index) as f64 / duration;
         summary.push_str(&format!(
             " · {} · {}",
-            dv_chart::format::format_duration(duration, 0.1),
+            if duration < 60.0 {
+                dv_chart::format::format_value(duration, "s", 3)
+            } else {
+                dv_chart::format::format_duration(duration, 0.1)
+            },
             dv_chart::format::format_value(rate, "Hz", precision)
         ));
     }

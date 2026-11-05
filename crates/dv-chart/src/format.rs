@@ -205,6 +205,17 @@ pub fn format_duration(seconds: f64, step: f64) -> String {
     format_duration_with_style(seconds, step, DurationStyle::Seconds)
 }
 
+/// A single elapsed-time readout (cursor, selection edges): under a minute in
+/// SI seconds with `sig` significant digits (`12.35 s`, `480 µs`), longer
+/// spans as minutes:seconds to the millisecond.
+pub fn format_elapsed(seconds: f64, sig: usize) -> String {
+    if seconds.abs() < 60.0 {
+        format_value(seconds, "s", sig.max(4))
+    } else {
+        format_duration(seconds, 0.001)
+    }
+}
+
 pub(crate) fn format_duration_with_style(
     seconds: f64,
     step: f64,
