@@ -453,9 +453,8 @@ impl ScriptDialog {
                         if primary_button(ui, "Save…", ok).clicked() {
                             if let (Ok(script), Some(path)) = (
                                 &self.script,
-                                rfd::FileDialog::new()
+                                crate::export::save_dialog(workspace, "", "py")
                                     .add_filter("Python", &["py"])
-                                    .set_file_name("rustdatview_plot.py")
                                     .save_file(),
                             ) {
                                 outcome = Some(match std::fs::write(&path, script) {

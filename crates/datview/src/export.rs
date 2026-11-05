@@ -1,6 +1,6 @@
 //! Figure output through the same chart layout and drawing engine as the UI.
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, LazyLock},
 };
 
@@ -482,6 +482,27 @@ fn preview(
     cache
 }
 
+/// A save dialog that suggests `<first file><suffix>.<extension>` next to the
+/// data, so exports land beside the logs they came from.
+pub(crate) fn save_dialog(workspace: &Workspace, suffix: &str, extension: &str) -> rfd::FileDialog {
+    let first = workspace
+        .sources
+        .iter()
+        .find(|source| !source.path.as_os_str().is_empty());
+    let stem = first
+        .and_then(|source| source.path.file_stem())
+        .map_or_else(
+            || "rustDatView".into(),
+            |stem| stem.to_string_lossy().into_owned(),
+        );
+    let mut dialog = rfd::FileDialog::new().set_file_name(format!("{stem}{suffix}.{extension}"));
+    if let Some(folder) = first.and_then(|source| source.path.parent()) {
+        // The Windows dialog ignores folders written with forward slashes.
+        dialog = dialog.set_directory(PathBuf::from(folder.to_string_lossy().replace('/', "\\")));
+    }
+    dialog
+}
+
 /// A Python script reproducing the current chart: files, processing steps,
 /// formulas, plotted channels, mode and the main chart styling.
 pub(crate) fn python_script(
@@ -794,9 +815,8 @@ pub(crate) fn show_dialog(
                     .min_size(egui::vec2(92.0, 30.0));
                 if ui.add(save).clicked() {
                     let extension = figure.format.extension();
-                    if let Some(mut path) = rfd::FileDialog::new()
+                    if let Some(mut path) = save_dialog(workspace, "", extension)
                         .add_filter(figure.format.label(), &[extension])
-                        .set_file_name(format!("figure.{extension}"))
                         .save_file()
                     {
                         if path.extension().is_none() {

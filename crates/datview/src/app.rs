@@ -411,10 +411,9 @@ impl DatView {
             self.session_path.clone()
         }
         .or_else(|| {
-            rfd::FileDialog::new()
+            export::save_dialog(&self.workspace, "", "dvsession")
                 .set_title("Save session")
                 .add_filter("rustDatView session", &["dvsession"])
-                .set_file_name("workspace.dvsession")
                 .save_file()
         });
         let Some(path) = path else {

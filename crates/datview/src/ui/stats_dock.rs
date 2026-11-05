@@ -528,10 +528,10 @@ impl StatsDock {
                     .min_scrolled_height(0.0)
                     .max_scroll_height(height)
                     .cell_layout(egui::Layout::right_to_left(egui::Align::Center))
-                    .column(Column::initial(if multiple_sources { 300.0 } else { 240.0 }).at_least(120.0).clip(true))
+                    .column(Column::initial(if multiple_sources { 270.0 } else { 240.0 }).at_least(120.0).clip(true))
                     .column(Column::initial(56.0).at_least(40.0).clip(true));
                 for _ in columns {
-                    builder = builder.column(Column::initial(104.0).at_least(64.0).clip(true));
+                    builder = builder.column(Column::initial(92.0).at_least(64.0).clip(true));
                     if reference.is_some() {
                         builder = builder.column(Column::initial(150.0).at_least(80.0).clip(true));
                     }
@@ -673,8 +673,7 @@ impl StatsDock {
             ));
         }
         if export {
-            if let Some(path) = rfd::FileDialog::new()
-                .set_file_name("statistics.csv")
+            if let Some(path) = crate::export::save_dialog(workspace, "-statistics", "csv")
                 .add_filter("CSV", &["csv"])
                 .save_file()
             {
