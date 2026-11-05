@@ -294,6 +294,21 @@ pub(crate) fn show(
             dv_chart::show(ui, state, panes, config, marks, chart_theme)
         },
     );
+    if workspace.series.is_empty() {
+        let tokens = theme::Tokens::for_dark(dark);
+        let text = workspace.chart_notice.as_deref().unwrap_or(if workspace.selected.is_empty() {
+            "Choose channels in the sidebar to plot them."
+        } else {
+            "The selected channels have no values to plot here."
+        });
+        ui.painter().text(
+            response.response.rect.center(),
+            egui::Align2::CENTER_CENTER,
+            text,
+            egui::FontId::proportional(14.0),
+            tokens.text_secondary,
+        );
+    }
     let mut pane_changed = false;
     match response.pane_action.as_ref() {
         Some(dv_chart::PaneAction::ToggleLog(id)) => {
@@ -633,7 +648,11 @@ pub(crate) fn with_chart<R>(
         },
         x_format,
         x_flip: options.flip_x,
-        link_x: options.link_x,
+        // Distributions of different quantities (W, MHz, °C) have unrelated
+        // X axes; sharing one would squeeze all but one into a sliver.
+        link_x: options.link_x
+            && !(workspace.mode == Mode::Distribution
+                && workspace.series.iter().any(|s| s.family != workspace.series[0].family)),
         grid: options.grid,
         legend: options.legend,
         legend_values: options.legend_values,

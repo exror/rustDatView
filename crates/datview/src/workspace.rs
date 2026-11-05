@@ -229,6 +229,9 @@ pub(crate) struct Workspace {
     pub generation: u64,
     pub loading: Option<String>,
     pub problems: Vec<String>,
+    /// Why the chart is empty although channels are selected, shown in place
+    /// of the chart (for example, a polar plot without an angle on X).
+    pub chart_notice: Option<String>,
     pub follow: bool,
     pub panes: PaneSettings,
     pub annotations: Vec<Annotation>,
@@ -269,6 +272,7 @@ impl Workspace {
             generation: 0,
             loading: None,
             problems: Vec::new(),
+            chart_notice: None,
             follow: false,
             panes: PaneSettings::default(),
             annotations: Vec::new(),

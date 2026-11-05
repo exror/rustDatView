@@ -225,6 +225,8 @@ pub(crate) struct PaneLayout {
     /// "+N more" chip when the legend has more entries than fit; hovering the
     /// pane then lists every value in a floating card.
     legend_more: Option<(Rect, usize)>,
+    /// X tick labels drawn under this pane rather than on the shared axis.
+    own_x_axis: bool,
 }
 pub(crate) struct Layout {
     pub rect: Rect,
@@ -660,7 +662,14 @@ fn layout(
         };
         let (legend, legend_rect, legend_more) = legend_layout(canvas, pane, legend_area, config, theme);
         let header = legend_rect.map_or(0.0, |r| (r.bottom() - pane_rect.top() + 3.0).min(h * 0.5));
-        let plot = Rect::from_min_max(Pos2::new(left, y_top + header), Pos2::new(right, y_top + h));
+        // Unlinked panes (distributions of different quantities) need their
+        // own X labels; every pane but the last reserves a row for them.
+        let own_x_axis = !config.link_x && i + 1 < prepared_len;
+        let own_axis_height = if own_x_axis { theme.font_size + 10.0 } else { 0.0 };
+        let plot = Rect::from_min_max(
+            Pos2::new(left, y_top + header),
+            Pos2::new(right, (y_top + h - own_axis_height).max(y_top + header + 1.0)),
+        );
         if config.equal_aspect && x.scale == Scale::Linear && y.scale == Scale::Linear {
             let desired =
                 (x.range[1] - x.range[0]) * f64::from(plot.height() / plot.width().max(1.0));
@@ -704,6 +713,7 @@ fn layout(
             actions,
             legend_rect,
             legend_more,
+            own_x_axis,
         });
         y_top += h;
         if i + 1 < prepared_len {
@@ -1151,6 +1161,24 @@ fn draw(
             theme.axis_line,
             1.0,
         );
+        // Panes with their own X range label it under the pane; the last
+        // pane uses the shared axis below the chart.
+        if pl.own_x_axis {
+            for tick in pl.x_ticks.iter().filter(|tick| !tick.label.is_empty()) {
+                if let Some(x) = pl.x.x(pl.plot, tick.value) {
+                    if x >= pl.plot.left() - 1.0 && x <= pl.plot.right() + 1.0 {
+                        canvas.text(
+                            Pos2::new(x, pl.plot.bottom() + 4.0),
+                            Anchor::CenterTop,
+                            &tick.label,
+                            theme.font_size - 0.5,
+                            theme.axis_text,
+                            false,
+                        );
+                    }
+                }
+            }
+        }
         if let Some(header) = pl.legend_rect {
             let heading = pane_heading(pane);
             let row_center = header.top() + (theme.font_size + 9.0) * 0.5;

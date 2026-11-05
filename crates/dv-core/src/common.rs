@@ -297,7 +297,8 @@ pub fn splitunit(s: &str) -> (String, String) {
     }
 }
 
-/// Inverse of the unit of a column name (used for FFT frequency labels).
+/// Inverse of the unit of a column name (FFT frequency and PDF density
+/// labels): `1/s`, `1/MHz`, `s/m`; compound units keep parentheses, `1/(N·m)`.
 pub fn inverse_unit(s: &str) -> String {
     let u = unit(s);
     let u = u.trim();
@@ -305,14 +306,12 @@ pub fn inverse_unit(s: &str) -> String {
         String::new()
     } else if u == "-" {
         "-".into()
-    } else if u.chars().count() == 1 {
-        format!("1/{u}")
     } else if u == "m/s" {
         "s/m".into()
-    } else if u == "deg" {
-        "1/deg".into()
-    } else {
+    } else if u.contains(['/', '*', '·', ' ', '^']) {
         format!("1/({u})")
+    } else {
+        format!("1/{u}")
     }
 }
 
@@ -550,6 +549,8 @@ mod tests {
         assert_eq!(unit("Speed [m/s]"), "m/s");
         assert_eq!(inverse_unit("Time [s]"), "1/s");
         assert_eq!(inverse_unit("Az [deg]"), "1/deg");
+        assert_eq!(inverse_unit("Clock [MHz]"), "1/MHz");
+        assert_eq!(inverse_unit("Torque [N·m]"), "1/(N·m)");
         assert_eq!(clean_col("Wind_Speed (m/s)"), "windspeed");
     }
 

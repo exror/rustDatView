@@ -435,7 +435,7 @@ impl StatsDock {
         if updating {
             ui.label(RichText::new("Updating statistics…").small().color(tokens.text_muted));
         }
-        if workspace.series.is_empty() {
+        if workspace.series.is_empty() && workspace.selected.is_empty() {
             ui.add_space(6.0);
             ui.label(
                 RichText::new("Select channels to see their statistics.").color(tokens.text_muted),

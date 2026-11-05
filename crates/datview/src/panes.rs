@@ -292,9 +292,10 @@ fn unit_pane(family: &str, unit: &str, channel: &str) -> String {
     if parsed.family == UnitFamily::Boolean {
         return "Flags".into();
     }
-    if matches!(parsed.family, UnitFamily::Other | UnitFamily::Dimensionless)
-        || family.eq_ignore_ascii_case("other")
-    {
+    // Spectra and distributions keep the quantity they were computed from
+    // (`Power · 1/W`, `Clock · MHz²/Hz`); unknown quantities show the unit.
+    let known_family = !family.is_empty() && !family.eq_ignore_ascii_case("other");
+    if !known_family {
         if parsed.symbol.is_empty() {
             channel.to_owned()
         } else {
@@ -346,6 +347,7 @@ mod tests {
         assert_eq!(unit_pane("Other", "m²/Hz", "Spectrum"), "m²/Hz");
         assert_eq!(unit_pane("Other", "%", "Difference"), "%");
         assert_eq!(unit_pane("Other", "", "Speed"), "Speed");
+        assert_eq!(unit_pane("Power", "1/W", "CPU Package Power"), "Power · 1/W");
         assert_eq!(unit_pane("Flags", "Yes/No", "Throttle"), "Flags");
         assert_eq!(channel_pane("CPU", "C"), "CPU · °C");
     }

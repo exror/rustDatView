@@ -299,6 +299,7 @@ impl Workspace {
             }
         });
         let first_active = self.sources.iter().position(|source| source.active);
+        let mut notice = None;
         if let Some(x_key) = self.x_key.as_deref() {
             for key in &self.selected {
                 if self.mode == Mode::Compare
@@ -324,6 +325,10 @@ impl Workspace {
                         continue;
                     };
                     if ix == iy {
+                        continue;
+                    }
+                    if self.mode == Mode::Polar && !table.data.column(ix).is_float() {
+                        notice = Some("Polar plots need an angle on X. Choose an angle channel as X in the sidebar.".to_owned());
                         continue;
                     }
                     let id = series_id(source, key);
@@ -478,6 +483,7 @@ impl Workspace {
         }
         panes::arrange(&mut series, &self.sources, &mut self.panes);
         self.series = series;
+        self.chart_notice = notice.filter(|_| self.series.is_empty());
         self.item_signatures = item_signatures;
         self.series_signature = Some(full_signature(self, &pipeline));
     }

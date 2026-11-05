@@ -46,7 +46,13 @@ The overview strip under the chart shows the whole recording; drag its window to
 
 ## Comparing runs
 
-Open two logs of the same benchmark — for example `examples/cpu-benchmark-eco.csv` and `examples/cpu-benchmark-performance.csv` — and the same channels from both are overlaid, colored by run. Align their starts with one click, shift either run in time, and turn on **Compare to** in the statistics dock to see the difference in mean, max and energy against the reference run. The **Compare** mode plots relative or absolute differences, ratios or one run against the other.
+Open two logs of the same benchmark — for example `examples/cpu-benchmark-eco.csv` and `examples/cpu-benchmark-performance.csv` — and the same channels from both are overlaid and labelled by what differs in their names (`eco`, `performance`). Separate recordings are aligned at their start automatically; the notification offers Undo, and each source can be shifted in time. Turn on **Compare to** in the statistics dock to see Δ and Δ% against the reference run for every statistic. The **Compare** mode plots relative or absolute differences, ratios or one run against the other.
+
+<p align="center">
+  <img src="docs/images/compare-dark.png" alt="Two benchmark runs aligned at their start, with statistics compared against the eco run" width="900">
+</p>
+
+Logs that interleave several devices row by row — nvidia-smi with two GPUs, Intel PTAT or turbostat with one row per core — are split into one source per device as they open, so each GPU or core gets its own clean line (again with Undo). The **⋯** menu above the sources can also merge sources on a common X axis, stack their rows, transpose a table or split by any column; sessions rebuild these generated sources from their parents.
 
 ## Beyond plotting
 
@@ -54,13 +60,14 @@ Open two logs of the same benchmark — for example `examples/cpu-benchmark-eco.
 - **New channels** (<kbd>Ctrl</kbd>+<kbd>N</kbd>) — formulas such as `{CPU Package Power} + {GPU Power}`, with templates for sum, difference, ratio, efficiency, rate of change, running energy (`cumtrapz`) and moving average, and a live preview. Formulas survive reloads.
 - **Processing** — masks (`{Time} > 30 and {CPU Package Power} < 150`), moving-average/low-pass/high-pass filters, resampling, binning, outlier removal, unit standardization and OpenFAST nodal tools, as an ordered list of steps you can save and reuse.
 - **Analyze** — curve fitting (polynomial, exponential, sinusoid, Gaussian, second-order responses, custom formulas), damping from a decaying oscillation, rainflow fatigue equivalent loads, and a full statistics report — all on the selected range.
-- **Marks** — point annotations, highlighted regions, event markers and reference lines (TjMax, PL1, PL2) that appear in exported figures.
+- **Inspector** (<kbd>Ctrl</kbd>+<kbd>I</kbd>) — colour, width, dash, drawing style and pane for each series; **marks** (points, highlighted regions, event markers and reference lines such as TjMax, PL1 or PL2) edited in the axis' own time format and included in exported figures; and **filters** that hide samples outside chosen ranges without changing the data.
 - **Table and file info** — a fast data grid synced to the chart cursor, and what the reader detected (encoding, delimiter, units, skipped header rows).
-- **2D fields** — color maps of 2D fields from VTK, TurbSim and other field files, Cartesian or polar.
+- **2D fields** (<kbd>Ctrl</kbd>+<kbd>4</kbd>) — color maps of 2D fields from VTK, TurbSim and other field files, Cartesian or polar. Files that only contain fields open there directly.
 - **Sessions** — <kbd>Ctrl</kbd>+<kbd>S</kbd> saves files, channels, panes, styles, marks, processing and the view to a `.dvsession`; open it later, even after the logs have been regenerated.
 - **Export** — figures (PNG, SVG, PDF, EPS), data (CSV, Parquet, OpenFAST binary), statistics (TSV, CSV, Markdown) and a Python script that reproduces the chart.
 - **Follow** — watch files that are still being written and keep the newest data in view.
 - **Command palette** (<kbd>Ctrl</kbd>+<kbd>K</kbd>) — every command, channel and source by name. <kbd>F1</kbd> lists all shortcuts.
+- **Themes** — dark and light, following Windows by default, with an adjustable interface scale and font (Settings, <kbd>Ctrl</kbd>+<kbd>,</kbd>).
 
 ## Files it understands
 
@@ -85,6 +92,7 @@ rustDatView.exe [OPTIONS] [FILE ...]
   --x INDEX             X column (zero-based, including Index)
   --y INDEX[,INDEX]     Y columns
   --pipeline PATH       Apply a saved processing pipeline (JSON)
+  --plot-options JSON   Mode options, as written in a session or by the Python export
   --session PATH        Open a .dvsession
   --follow              Watch the files for new data
   --export PATH         Write a figure (.png .svg .pdf .eps) or Python script (.py) and exit
@@ -101,7 +109,7 @@ cargo build --release -p datview --locked
 cargo test --workspace --locked
 ```
 
-The executable is `target/release/datview.exe`.
+The executable is `target/release/datview.exe`; release archives ship it as `rustDatView.exe`.
 
 | Crate | Responsibility |
 | --- | --- |
