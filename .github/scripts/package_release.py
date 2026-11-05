@@ -83,7 +83,8 @@ def main():
                 if file.is_file():
                     output.write(file, file.relative_to(root.parent))
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-        (assets / 'SHA256SUMS.txt').write_text(f'{digest}  {archive.name}\n', encoding='utf-8')
+        # LF endings, so `sha256sum -c SHA256SUMS.txt` works everywhere.
+        (assets / 'SHA256SUMS.txt').write_text(f'{digest}  {archive.name}\n', encoding='utf-8', newline='\n')
         print(f'Packaged and smoke-tested {archive.name} ({archive.stat().st_size} bytes, sha256 {digest})')
 
 
