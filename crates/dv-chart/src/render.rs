@@ -1614,9 +1614,10 @@ fn draw(
                 } else {
                     pos.x - 18.0 - width
                 };
+                // Start no higher than the plot, so the pane's own legend stays visible.
                 let y = (pos.y - height * 0.5).clamp(
-                    layout.rect.top() + 4.0,
-                    (layout.rect.bottom() - height - 4.0).max(layout.rect.top()),
+                    pl.plot.top() + 2.0,
+                    (layout.rect.bottom() - height - 4.0).max(pl.plot.top() + 2.0),
                 );
                 let card = Rect::from_min_size(Pos2::new(x, y), Vec2::new(width, height));
                 // Opaque, outlined card: values must stay readable over dense traces.
