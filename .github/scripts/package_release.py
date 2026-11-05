@@ -13,11 +13,12 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 EXAMPLES = (
+    'cpu-gaming-session.csv',
+    'cpu-benchmark-eco.csv',
+    'cpu-benchmark-performance.csv',
     'motherboard-power.csv',
     'signals.csv',
     'field_lzma.vti',
-    'cpu-benchmark-eco.csv',
-    'cpu-benchmark-performance.csv',
 )
 
 
@@ -46,6 +47,8 @@ def main():
             raise RuntimeError(f'Incorrect release version: {actual}')
         for filename in ('README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'CHANGELOG.md'):
             shutil.copy2(repo / filename, root / filename)
+        if not (repo / 'licenses' / 'RUST-DEPENDENCIES.txt').is_file():
+            raise RuntimeError('Run .github/scripts/rust_licenses.py before packaging')
         shutil.copytree(repo / 'licenses', root / 'licenses')
         examples = root / 'examples'
         examples.mkdir()

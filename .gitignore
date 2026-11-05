@@ -2,6 +2,8 @@
 /.mingw/
 /upstream/
 /.cargo/config.toml
+# Written by .github/scripts/rust_licenses.py when a release is packaged.
+/licenses/RUST-DEPENDENCIES.txt
 .env
 .env.*
 !.env.example
