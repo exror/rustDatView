@@ -1212,6 +1212,47 @@ mod tests {
     }
 
     #[test]
+    fn split_and_merged_sources_are_rebuilt_from_recipes() {
+        let dir = TestDir::new();
+        let gpus = dir.file("gpus.csv");
+        std::fs::write(
+            &gpus,
+            "Time_[s],name,Power_[W]\n0,RTX 4090,100\n0,RTX 3060,50\n1,RTX 4090,110\n1,RTX 3060,55\n2,RTX 4090,120\n2,RTX 3060,60\n",
+        )
+        .unwrap();
+        let mut workspace = Workspace::new(false);
+        workspace.load(vec![gpus], false, Some("CSV file".into()));
+        wait_for_load(&mut workspace);
+        workspace.x_key = Some(clean_col("Time_[s]"));
+        let column = workspace.tables.tabs[0].data.columns().iter().position(|c| c.name == "name").unwrap();
+        workspace.split_source(0, column).unwrap();
+        assert_eq!(workspace.sources.len(), 3, "{:?}", workspace.problems);
+        workspace.selected = vec![clean_col("Power_[W]")];
+        workspace.merge_sources().unwrap();
+        assert_eq!(workspace.sources.len(), 4, "{:?}", workspace.problems);
+        workspace.data_changed();
+        workspace.rebuild();
+        let merged_columns: Vec<String> =
+            workspace.tables.tabs[3].data.columns().iter().map(|c| c.name.clone()).collect();
+        let before = defaults(&workspace);
+
+        let mut target = Workspace::new(false);
+        let mut restore = before.clone().begin(&mut target).unwrap();
+        wait_for_load(&mut target);
+        let view = restore.finish(&mut target).unwrap();
+        assert!(restore.unresolved().is_empty(), "{:?}", target.problems);
+        let names: Vec<&str> = target.sources.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["gpus.csv", "gpus.csv · RTX 4090", "gpus.csv · RTX 3060", "RTX 4090 + RTX 3060 (merged)"]);
+        let active: Vec<bool> = target.sources.iter().map(|s| s.active).collect();
+        assert_eq!(active, [false, false, false, true]);
+        let restored_columns: Vec<String> =
+            target.tables.tabs[3].data.columns().iter().map(|c| c.name.clone()).collect();
+        assert_eq!(restored_columns, merged_columns);
+        let after = Session::capture(&target, &view.chart, &view.chart_options, &view.figure_options, &view.stats, Some(&restore)).unwrap();
+        assert_eq!(serde_json::to_value(before).unwrap(), serde_json::to_value(after).unwrap());
+    }
+
+    #[test]
     fn missing_file_is_reported_retained_and_relocatable() {
         let dir = TestDir::new();
         let input = csv(&dir);
