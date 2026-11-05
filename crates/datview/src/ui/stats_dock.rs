@@ -490,13 +490,12 @@ impl StatsDock {
                     .min_scrolled_height(0.0)
                     .max_scroll_height(height)
                     .cell_layout(egui::Layout::right_to_left(egui::Align::Center))
-                    .column(Column::initial(240.0).at_least(120.0).clip(true))
+                    .column(Column::initial(if multiple_sources { 300.0 } else { 240.0 }).at_least(120.0).clip(true))
                     .column(Column::initial(56.0).at_least(40.0).clip(true));
                 for _ in columns {
                     builder = builder.column(Column::initial(104.0).at_least(64.0).clip(true));
                     if reference.is_some() {
-                        builder = builder.column(Column::initial(105.0).at_least(70.0).clip(true))
-                            .column(Column::initial(86.0).at_least(60.0).clip(true));
+                        builder = builder.column(Column::initial(150.0).at_least(80.0).clip(true));
                     }
                 }
                 builder
@@ -535,11 +534,7 @@ impl StatsDock {
                             if reference.is_some() {
                                 header.col(|ui| {
                                     ui.label(RichText::new(format!("{} Δ", column.label())).color(tokens.text_secondary))
-                                        .on_hover_text("Value minus the reference source's value");
-                                });
-                                header.col(|ui| {
-                                    ui.label(RichText::new(format!("{} Δ%", column.label())).color(tokens.text_secondary))
-                                        .on_hover_text("Difference divided by the reference value; unavailable when the reference is zero");
+                                        .on_hover_text("Value minus the reference source's value, and that difference relative to the reference");
                                 });
                             }
                         }
@@ -592,13 +587,23 @@ impl StatsDock {
                                     let compared = references.get(row.series.key.as_str())
                                         .and_then(|base| comparison(row, base, column));
                                     table_row.col(|ui| {
-                                        let text = compared.map_or_else(|| "—".into(), |(delta, _)| format_delta(row, column, delta, precision));
+                                        let text = match compared {
+                                            None => "—".to_owned(),
+                                            Some((delta, percent)) => {
+                                                // Like the value cells, plain numbers in the row's unit;
+                                                // energy scales its own unit.
+                                                let delta_text = if column == StatsColumn::Energy {
+                                                    format_delta(row, column, delta, precision)
+                                                } else {
+                                                    signed(compound(delta, "", precision), delta)
+                                                };
+                                                match percent {
+                                                    Some(percent) => format!("{delta_text}  ({})", signed(compound(percent, "%", 3), percent)),
+                                                    None => delta_text,
+                                                }
+                                            }
+                                        };
                                         ui.label(RichText::new(text).color(tokens.text));
-                                    });
-                                    table_row.col(|ui| {
-                                        let text = compared.and_then(|(_, percent)| percent)
-                                            .map_or_else(|| "—".into(), |percent| signed(compound(percent, "%", precision), percent));
-                                        ui.label(RichText::new(text).color(tokens.text_secondary));
                                     });
                                 }
                             }
