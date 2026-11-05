@@ -948,7 +948,6 @@ impl DatView {
             let point_id = anchor.map(|s| s.id);
             let pane = anchor.map(|s| s.pane.clone());
             let unit = anchor.map(|s| s.unit.clone()).unwrap_or_default();
-            let datetime = anchor.is_some_and(|s| s.datetime);
             if let Some((id, key, label, current_color, current_dash, flag)) = &target {
                 ui.strong(label);
                 if ui.button(if self.chart.hidden.contains(id) { "Show series" } else { "Hide series" }).clicked() {
@@ -1016,7 +1015,7 @@ impl DatView {
                 if let Some(id) = point_id {
                     self.workspace.annotations.push(Annotation::Point {
                         mode: self.workspace.mode, curve: RangeRule::series_target(id),
-                        x: context.x, y: context.y, label: "Point".into(), color: ui::inspector::mark_color(ctx),
+                        x: context.x, y: context.y, label: "Point".into(), color: ui::inspector::MARK_COLOR,
                     });
                 }
                 ui.close();
@@ -1024,7 +1023,7 @@ impl DatView {
             if ui.add_enabled(self.chart.selection.is_some(), egui::Button::new("Add region from selection")).clicked() {
                 if let Some([a, b]) = self.chart.selection {
                     if let Some(region) = Annotation::region(self.workspace.mode, self.workspace.x_key.clone().unwrap_or_default(),
-                        a, b, "Selection".into(), ui::inspector::mark_color(ctx)) {
+                        a, b, "Selection".into(), ui::inspector::MARK_COLOR) {
                         self.workspace.annotations.push(region);
                     }
                 }
@@ -1034,7 +1033,7 @@ impl DatView {
                 if let Some(pane) = &pane {
                     self.workspace.annotations.push(Annotation::HLine {
                         mode: self.workspace.mode, pane: pane.clone(), y: context.y,
-                        label: "Reference".into(), color: ui::inspector::mark_color(ctx),
+                        label: "Reference".into(), color: ui::inspector::MARK_COLOR,
                     });
                 }
                 ui.close();
@@ -1042,7 +1041,7 @@ impl DatView {
             if ui.add_enabled(context.x.is_finite(), egui::Button::new("Add event marker here")).clicked() {
                 self.workspace.annotations.push(Annotation::VLine {
                     mode: self.workspace.mode, x_axis: self.workspace.x_key.clone().unwrap_or_default(),
-                    x: context.x, label: "Event".into(), color: ui::inspector::mark_color(ctx),
+                    x: context.x, label: "Event".into(), color: ui::inspector::MARK_COLOR,
                 });
                 ui.close();
             }
@@ -1061,10 +1060,12 @@ impl DatView {
                 ui.close();
             }
             if ui.button("Fit all").clicked() { self.chart.fit_all(); ui.close(); }
-            if ui.button("Auto-Y all").clicked() { self.chart.y_views.clear(); ui.close(); }
-            if ui.add_enabled(context.x.is_finite() && context.y.is_finite(), egui::Button::new("Copy value")).clicked() {
-                let x = if datetime { dv_chart::format::format_time(context.x, 0.001) }
-                    else { dv_chart::format::format_value(context.x, "", self.settings.precision) };
+            if ui.button("Fit Y in every pane").clicked() { self.chart.y_views.clear(); ui.close(); }
+            if ui.add_enabled(context.x.is_finite() && context.y.is_finite(), egui::Button::new("Copy X and Y"))
+                .on_hover_text("Copy the position under the cursor as tab-separated text")
+                .clicked()
+            {
+                let x = ui::chart_view::x_readout(&self.workspace, context.x, self.settings.precision);
                 let y = dv_chart::format::format_value(context.y, &unit, self.settings.precision);
                 ctx.copy_text(format!("{x}\t{y}"));
                 ui.close();
@@ -1596,6 +1597,7 @@ impl eframe::App for DatView {
                 .resizable(true)
                 .default_size(330.0)
                 .min_size(280.0)
+                .max_size(560.0)
                 .frame(
                     egui::Frame::new()
                         .fill(tokens.panel_bg)
@@ -1835,16 +1837,6 @@ fn set_plot_options(workspace: &mut Workspace, value: &serde_json::Value) -> Res
         }
     }
     Ok(())
-}
-
-fn plot_type(workspace: &Workspace) -> PlotType {
-    match workspace.mode {
-        Mode::Signals | Mode::Compare => PlotType::Regular,
-        Mode::Distribution => PlotType::Pdf(workspace.options.pdf.clone()),
-        Mode::Spectrum => PlotType::Fft(workspace.options.fft.clone()),
-        Mode::Normalized => PlotType::MinMax(workspace.options.normalized.clone()),
-        Mode::Polar => PlotType::Polar(workspace.options.polar.clone()),
-    }
 }
 
 pub(crate) fn headless_export(launch: &Launch, path: &Path) -> Result<(), String> {

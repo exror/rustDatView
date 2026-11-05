@@ -38,9 +38,6 @@ pub(crate) struct Tokens {
     pub success: Color32,
     pub warning: Color32,
     pub error: Color32,
-    pub grid: Color32,
-    pub axis_text: Color32,
-    pub crosshair: Color32,
 }
 
 impl Tokens {
@@ -61,9 +58,6 @@ impl Tokens {
                 success: Color32::from_rgb(0x3f, 0xb6, 0x8b),
                 warning: Color32::from_rgb(0xe5, 0xa9, 0x3b),
                 error: Color32::from_rgb(0xf0, 0x61, 0x6d),
-                grid: Color32::from_white_alpha(14),
-                axis_text: Color32::from_rgb(0x8c, 0x95, 0xa1),
-                crosshair: Color32::from_white_alpha(102),
             }
         } else {
             Self {
@@ -81,9 +75,6 @@ impl Tokens {
                 success: Color32::from_rgb(0x1f, 0x9d, 0x6c),
                 warning: Color32::from_rgb(0xc9, 0x87, 0x10),
                 error: Color32::from_rgb(0xd9, 0x38, 0x48),
-                grid: Color32::from_black_alpha(15),
-                axis_text: Color32::from_rgb(0x6a, 0x73, 0x80),
-                crosshair: Color32::from_black_alpha(89),
             }
         }
     }

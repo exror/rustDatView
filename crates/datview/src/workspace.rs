@@ -20,9 +20,7 @@ use std::{
 };
 
 pub(crate) use crate::channels::Channel;
-pub(crate) use crate::panes::{
-    Annotation, ColorBy, FilterMode, LineDraw, PaneGrouping, PaneSettings, RangeRule, SeriesStyle,
-};
+pub(crate) use crate::panes::{Annotation, ColorBy, PaneSettings, RangeRule};
 pub(crate) use crate::series::SeriesData;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,18 +32,6 @@ pub(crate) enum Mode {
     Normalized,
     Compare,
     Polar,
-}
-impl Mode {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Signals => "Signals",
-            Self::Distribution => "Distribution",
-            Self::Spectrum => "Spectrum",
-            Self::Normalized => "Normalized",
-            Self::Compare => "Compare",
-            Self::Polar => "Polar",
-        }
-    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

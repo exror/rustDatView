@@ -1,5 +1,5 @@
 //! Editable presentation controls for the current chart.
-use dv_chart::ChartState;
+use dv_chart::{format, ChartState};
 use eframe::egui::{self, RichText, Stroke};
 
 use super::{chart_view, icons, theme, widgets};
@@ -14,7 +14,7 @@ enum Tab {
     #[default]
     Series,
     Marks,
-    Display,
+    Filters,
 }
 
 #[derive(Default)]
@@ -23,13 +23,9 @@ pub(crate) struct Inspector {
     new_pane: String,
 }
 
-/// Persist the actual theme accent in a mark, so screen and exports agree.
-pub(crate) fn mark_color(ctx: &egui::Context) -> [u8; 3] {
-    let [r, g, b, _] = theme::Tokens::for_dark(theme::is_dark(ctx))
-        .accent
-        .to_srgba_unmultiplied();
-    [r, g, b]
-}
+/// Marks use a neutral slate by default: visible on dark and light figures
+/// and never mistaken for a series colour.
+pub(crate) const MARK_COLOR: [u8; 3] = [140, 150, 168];
 
 impl Inspector {
     /// Returns true when the panel's close button is pressed.
@@ -57,7 +53,7 @@ impl Inspector {
             &[
                 (Tab::Series, "Series", "Style and arrange plotted series"),
                 (Tab::Marks, "Marks", "Annotations and reference lines"),
-                (Tab::Display, "Display", "Non-destructive display filters"),
+                (Tab::Filters, "Filters", "Hide samples outside chosen ranges without changing the data"),
             ],
         ) {
             self.tab = tab;
@@ -73,7 +69,7 @@ impl Inspector {
                         marks(ui, workspace, chart, options, cursor, tokens);
                         false
                     }
-                    Tab::Display => rules(ui, workspace, tokens),
+                    Tab::Filters => rules(ui, workspace, tokens),
                 };
                 if rebuild {
                     workspace.rebuild();
@@ -122,14 +118,18 @@ impl Inspector {
                         ).clicked() {
                             if visible { chart.hidden.insert(series.id); } else { chart.hidden.remove(&series.id); }
                         }
-                        let (dot, _) = ui.allocate_exact_size(egui::vec2(16.0, 24.0), egui::Sense::hover());
+                        let (dot, _) = ui.allocate_exact_size(egui::vec2(12.0, 24.0), egui::Sense::hover());
                         ui.painter().circle_filled(dot.center(), 5.0, current_color);
-                        let label_width = (ui.available_width() - 48.0).max(30.0);
-                        ui.add_sized([label_width, 24.0], egui::Label::new(RichText::new(&series.label).strong().color(tokens.text)).halign(egui::Align::Min).truncate())
-                            .on_hover_text(&series.label);
-                        if widgets::icon_button(ui, icons::TRASH, "Remove this series from the chart").clicked() {
-                            remove = Some((series.id, series.label.clone()));
-                        }
+                        // Trash pinned right; the label takes what is left and truncates.
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if widgets::icon_button(ui, icons::TRASH, "Remove this series from the chart").clicked() {
+                                remove = Some((series.id, series.label.clone()));
+                            }
+                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                ui.add(egui::Label::new(RichText::new(&series.label).strong().color(tokens.text)).truncate())
+                                    .on_hover_text(&series.label);
+                            });
+                        });
                     });
                     let detail = match (series.unit.is_empty(), source.is_empty()) {
                         (false, false) => format!("{}  ·  {}", series.unit, source),
@@ -144,42 +144,42 @@ impl Inspector {
                     egui::CollapsingHeader::new("Style & pane")
                         .default_open(index == 0)
                         .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label("Color");
-                                if ui.color_edit_button_srgb(&mut color).changed() {
-                                    style.color = Some(color);
-                                    changed = true;
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("Width");
-                                let mut width = style.width.unwrap_or(settings.line_width);
-                                if ui.add(egui::DragValue::new(&mut width).range(0.5..=6.0).speed(0.05).suffix(" px")).changed() {
-                                    style.width = Some(width);
-                                    changed = true;
-                                }
-                            });
+                            // Label column plus grid spacing; controls take the rest.
+                            let control = (ui.available_width() - 72.0).max(80.0);
                             let mut dash = style.dash.unwrap_or(series.dash);
-                            ui.horizontal(|ui| {
-                                ui.label("Dash");
-                                egui::ComboBox::from_id_salt("dash")
-                                    .selected_text(dash_label(dash))
-                                    .show_ui(ui, |ui| {
-                                        for (value, label) in [(0, "Solid"), (1, "Dashed"), (2, "Dotted"), (3, "Dash-dot")] {
-                                            changed |= ui.selectable_value(&mut dash, value, label).changed();
-                                        }
-                                    });
-                            });
-                            if dash != style.dash.unwrap_or(series.dash) { style.dash = Some(dash); }
                             let default_draw = if workspace.mode == Mode::Signals && series.family == "Flags" {
                                 LineDraw::Steps
                             } else {
                                 LineDraw::Lines
                             };
                             let mut draw = style.draw.unwrap_or(default_draw);
-                            ui.horizontal(|ui| {
+                            widgets::property_grid(ui, "style", |ui| {
+                                ui.label("Color");
+                                if ui.color_edit_button_srgb(&mut color).changed() {
+                                    style.color = Some(color);
+                                    changed = true;
+                                }
+                                ui.end_row();
+                                ui.label("Width");
+                                let mut width = style.width.unwrap_or(settings.line_width);
+                                if ui.add(egui::DragValue::new(&mut width).range(0.5..=6.0).speed(0.05).suffix(" px")).changed() {
+                                    style.width = Some(width);
+                                    changed = true;
+                                }
+                                ui.end_row();
+                                ui.label("Dash");
+                                egui::ComboBox::from_id_salt("dash")
+                                    .width(control)
+                                    .selected_text(dash_label(dash))
+                                    .show_ui(ui, |ui| {
+                                        for (value, label) in [(0, "Solid"), (1, "Dashed"), (2, "Dotted"), (3, "Dash-dot")] {
+                                            changed |= ui.selectable_value(&mut dash, value, label).changed();
+                                        }
+                                    });
+                                ui.end_row();
                                 ui.label("Draw");
                                 egui::ComboBox::from_id_salt("draw")
+                                    .width(control)
                                     .selected_text(draw_label(draw))
                                     .show_ui(ui, |ui| {
                                         for (value, label) in [
@@ -191,12 +191,10 @@ impl Inspector {
                                             changed |= ui.selectable_value(&mut draw, value, label).changed();
                                         }
                                     });
-                            });
-                            if draw != style.draw.unwrap_or(default_draw) { style.draw = Some(draw); }
-                            ui.horizontal(|ui| {
+                                ui.end_row();
                                 ui.label("Pane");
                                 egui::ComboBox::from_id_salt("pane")
-                                    .width((ui.available_width() - 20.0).max(70.0))
+                                    .width(control)
                                     .selected_text(&series.pane)
                                     .show_ui(ui, |ui| {
                                         for name in &names {
@@ -205,11 +203,19 @@ impl Inspector {
                                             }
                                         }
                                     });
+                                ui.end_row();
                             });
+                            if dash != style.dash.unwrap_or(series.dash) { style.dash = Some(dash); }
+                            if draw != style.draw.unwrap_or(default_draw) { style.draw = Some(draw); }
                             ui.horizontal(|ui| {
-                                let width = (ui.available_width() - 80.0).max(60.0);
-                                ui.add_sized([width, 26.0], egui::TextEdit::singleline(&mut self.new_pane).hint_text("New pane name"));
-                                if ui.add_enabled(!self.new_pane.trim().is_empty(), egui::Button::new("Move")).clicked() {
+                                let width = (ui.available_width() - 70.0).max(60.0);
+                                let edit = ui.add(egui::TextEdit::singleline(&mut self.new_pane).hint_text("New pane name").desired_width(width));
+                                let submit = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                if ui.add_enabled(!self.new_pane.trim().is_empty(), egui::Button::new("Move"))
+                                    .on_hover_text("Move this series to a new pane")
+                                    .clicked()
+                                    || (submit && !self.new_pane.trim().is_empty())
+                                {
                                     move_to = Some((series.id, self.new_pane.trim().to_owned()));
                                     self.new_pane.clear();
                                 }
@@ -271,7 +277,9 @@ pub(crate) fn move_series(workspace: &mut Workspace, id: u64, name: String) {
 }
 
 fn card(ui: &mut egui::Ui, tokens: theme::Tokens, contents: impl FnOnce(&mut egui::Ui)) {
-    let width = (ui.available_width() - 16.0).max(0.0);
+    // Inner margin (2 × 8), stroke (2 × 1) and a little slack for pixel
+    // rounding: the card must never be wider than the panel, or the panel grows.
+    let width = (ui.available_width() - 20.0).max(0.0);
     egui::Frame::new()
         .fill(tokens.surface)
         .stroke(Stroke::new(1.0, tokens.border))
@@ -312,18 +320,26 @@ fn marks(
     cursor: Option<f64>,
     tokens: theme::Tokens,
 ) {
-    let color = mark_color(ui.ctx());
+    let color = MARK_COLOR;
     let selection = chart.selection.filter(|[a, b]| a.is_finite() && b.is_finite() && a != b);
-    if ui.add_enabled(selection.is_some(), egui::Button::new("Region from selection")).on_hover_text("Select a range on the chart first").clicked() {
-        if let Some([a, b]) = selection {
-            if let Some(region) = Annotation::region(workspace.mode, workspace.x_key.clone().unwrap_or_default(), a, b, "Selection".into(), color) {
-                workspace.annotations.push(region);
+    let event_x = selection.map(|[a, b]| a.min(b)).or(cursor).filter(|x| x.is_finite());
+    ui.horizontal_wrapped(|ui| {
+        if ui.add_enabled(selection.is_some(), egui::Button::new("Region"))
+            .on_hover_text("Mark the selected range")
+            .on_disabled_hover_text("Select a range on the chart first")
+            .clicked()
+        {
+            if let Some([a, b]) = selection {
+                if let Some(region) = Annotation::region(workspace.mode, workspace.x_key.clone().unwrap_or_default(), a, b, "Selection".into(), color) {
+                    workspace.annotations.push(region);
+                }
             }
         }
-    }
-    let event_x = selection.map(|[a, b]| a.min(b)).or(cursor).filter(|x| x.is_finite());
-    ui.horizontal(|ui| {
-        if ui.add_enabled(event_x.is_some(), egui::Button::new("Event marker")).on_hover_text("Add at the selection start or last chart cursor").clicked() {
+        if ui.add_enabled(event_x.is_some(), egui::Button::new("Event"))
+            .on_hover_text("Vertical marker at the selection start or the last cursor position")
+            .on_disabled_hover_text("Point at the chart or select a range first")
+            .clicked()
+        {
             if let Some(x) = event_x {
                 workspace.annotations.push(Annotation::VLine {
                     mode: workspace.mode, x_axis: workspace.x_key.clone().unwrap_or_default(), x,
@@ -331,10 +347,15 @@ fn marks(
                 });
             }
         }
-        if ui.add_enabled(!workspace.series.is_empty(), egui::Button::new("Reference line")).on_hover_text("Add a horizontal reference to a pane").clicked() {
+        if ui.add_enabled(!workspace.series.is_empty(), egui::Button::new("Reference line"))
+            .on_hover_text("Horizontal line at the mean of the first series; edit the value below")
+            .clicked()
+        {
             if let Some(first) = workspace.series.first() {
+                let (sum, count) = first.y.iter().filter(|v| v.is_finite()).fold((0.0, 0_usize), |(s, n), v| (s + v, n + 1));
+                let y = if count > 0 { sum / count as f64 } else { 0.0 };
                 workspace.annotations.push(Annotation::HLine {
-                    mode: workspace.mode, pane: first.pane.clone(), y: 0.0,
+                    mode: workspace.mode, pane: first.pane.clone(), y,
                     label: "Reference".into(), color,
                 });
             }
@@ -342,6 +363,7 @@ fn marks(
     });
     ui.add_space(8.0);
     let names = pane_names(&workspace.series);
+    let x_input = XInput::of(workspace);
     let mut delete = None;
     let mut zoom = None;
     let mut any = false;
@@ -357,45 +379,48 @@ fn marks(
                     Annotation::HLine { label, color, .. } => ("Reference line", label, color),
                 };
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(kind).strong());
+                    ui.label(RichText::new(kind).strong().color(tokens.text));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if widgets::icon_button(ui, icons::TRASH, "Delete mark").clicked() { delete = Some(index); }
                         if widgets::icon_button(ui, icons::ZOOM_IN, "Zoom to mark").clicked() { zoom = Some(index); }
                         ui.color_edit_button_srgb(color).on_hover_text("Mark color");
                     });
                 });
-                ui.add(egui::TextEdit::singleline(label).hint_text("Label").desired_width(ui.available_width()));
-                match &mut *mark {
+                ui.add(egui::TextEdit::singleline(label).hint_text("Label").desired_width(ui.available_width() - 12.0));
+                widgets::property_grid(ui, "mark", |ui| match &mut *mark {
                     Annotation::Point { curve, x, y, .. } => {
-                        let channel = point_series(&workspace.series, curve).map_or(curve.as_str(), |s| s.label.as_str());
-                        ui.add(egui::Label::new(RichText::new(channel).size(11.5).color(tokens.text_secondary)).truncate()).on_hover_text(channel);
-                        number_row(ui, "X", x);
-                        number_row(ui, "Y", y);
+                        let series = point_series(&workspace.series, curve);
+                        ui.label("Series");
+                        let channel = series.map_or(curve.as_str(), |s| s.label.as_str());
+                        ui.add(egui::Label::new(RichText::new(channel).color(tokens.text_secondary)).truncate()).on_hover_text(channel);
+                        ui.end_row();
+                        x_row(ui, "X", x, x_input);
+                        value_row(ui, "Y", y, series.map_or("", |s| s.unit.as_str()));
                     }
                     Annotation::Region { min, max, .. } => {
-                        number_row(ui, "Start", min);
-                        number_row(ui, "End", max);
+                        x_row(ui, "Start", min, x_input);
+                        x_row(ui, "End", max, x_input);
                     }
-                    Annotation::VLine { x, .. } => number_row(ui, "X", x),
+                    Annotation::VLine { x, .. } => x_row(ui, "X", x, x_input),
                     Annotation::HLine { pane, y, .. } => {
-                        ui.horizontal(|ui| {
-                            ui.label("Pane");
-                            egui::ComboBox::from_id_salt("reference-pane")
-                                .width((ui.available_width() - 20.0).max(70.0))
-                                .selected_text(pane.as_str())
-                                .show_ui(ui, |ui| {
-                                    for name in &names { ui.selectable_value(pane, (*name).to_owned(), *name); }
-                                });
-                        });
-                        number_row(ui, "Value", y);
+                        ui.label("Pane");
+                        egui::ComboBox::from_id_salt("reference-pane")
+                            .width((ui.available_width() - 24.0).max(70.0))
+                            .selected_text(pane.as_str())
+                            .show_ui(ui, |ui| {
+                                for name in &names { ui.selectable_value(pane, (*name).to_owned(), *name); }
+                            });
+                        ui.end_row();
+                        let unit = workspace.series.iter().find(|s| s.pane == *pane).map_or("", |s| s.unit.as_str());
+                        value_row(ui, "Value", y, unit);
                     }
-                }
+                });
             });
         });
         ui.add_space(6.0);
     }
     if !any {
-        ui.label(RichText::new("No marks in this mode. Right-click the chart to add a point.").color(tokens.text_muted));
+        ui.label(RichText::new("No marks in this mode. Add one above or right-click the chart.").color(tokens.text_muted));
     }
     if let Some(index) = zoom {
         if let Some(mark) = workspace.annotations.get(index) {
@@ -405,11 +430,51 @@ fn marks(
     if let Some(index) = delete { workspace.annotations.remove(index); }
 }
 
-fn number_row(ui: &mut egui::Ui, name: &str, value: &mut f64) {
-    ui.horizontal(|ui| {
-        ui.label(name);
-        ui.add(egui::DragValue::new(value).range(-f64::MAX..=f64::MAX).speed(0.1));
-    });
+/// How mark positions along X are written and typed: the way the X axis shows them.
+#[derive(Clone, Copy)]
+enum XInput {
+    Number,
+    Clock,
+    Duration,
+}
+
+impl XInput {
+    fn of(workspace: &Workspace) -> Self {
+        match chart_view::x_axis_format(workspace).0 {
+            dv_chart::AxisFormat::DateTime => Self::Clock,
+            dv_chart::AxisFormat::Duration => Self::Duration,
+            _ => Self::Number,
+        }
+    }
+}
+
+fn x_row(ui: &mut egui::Ui, name: &str, value: &mut f64, input: XInput) {
+    ui.label(name);
+    // Typing a time of day keeps the date of the current position.
+    let day = (*value / 86_400.0).floor() * 86_400.0;
+    let drag = egui::DragValue::new(value).range(-f64::MAX..=f64::MAX).speed(0.1);
+    let drag = match input {
+        XInput::Number => drag,
+        XInput::Clock => drag
+            .custom_formatter(|v, _| format::format_time(v, 0.1))
+            .custom_parser(move |text| format::parse_seconds(text).map(|seconds| day + seconds)),
+        XInput::Duration => drag
+            .custom_formatter(|v, _| if v.abs() < 60.0 { format::format_value(v, "s", 6) } else { format::format_duration(v, 0.001) })
+            .custom_parser(format::parse_seconds),
+    };
+    ui.add(drag);
+    ui.end_row();
+}
+
+fn value_row(ui: &mut egui::Ui, name: &str, value: &mut f64, unit: &str) {
+    ui.label(name);
+    let speed = (value.abs() * 0.002).max(0.01);
+    let mut drag = egui::DragValue::new(value).range(-f64::MAX..=f64::MAX).speed(speed);
+    if !unit.is_empty() {
+        drag = drag.suffix(format!(" {unit}"));
+    }
+    ui.add(drag);
+    ui.end_row();
 }
 
 fn point_series<'a>(series: &'a [crate::series::SeriesData], curve: &str) -> Option<&'a crate::series::SeriesData> {
@@ -466,10 +531,10 @@ fn centered_x(workspace: &Workspace, chart: &ChartState, x: f64) -> [f64; 2] {
 }
 
 fn rules(ui: &mut egui::Ui, workspace: &mut Workspace, tokens: theme::Tokens) -> bool {
-    ui.label(RichText::new("Filters create gaps without changing source data. Statistics and newly calculated analyses use the filtered series.").size(11.5).color(tokens.text_secondary));
+    ui.label(RichText::new("Filters hide samples on the chart without changing source data. Statistics and new analyses use the filtered series.").size(11.5).color(tokens.text_secondary));
     ui.add_space(8.0);
     let mut rebuild = false;
-    if ui.button("Add display filter").clicked() {
+    if ui.button("Add filter").clicked() {
         workspace.rules.push(RangeRule { enabled: true, mode: workspace.mode, target: String::new(), bounds: [None; 4], action: FilterMode::Keep });
         rebuild = true;
     }
@@ -503,7 +568,7 @@ fn rules(ui: &mut egui::Ui, workspace: &mut Workspace, tokens: theme::Tokens) ->
                 };
                 ui.label(RichText::new("Apply to").color(tokens.text_secondary));
                 egui::ComboBox::from_id_salt("filter-target")
-                    .width((ui.available_width() - 20.0).max(70.0))
+                    .width((ui.available_width() - 24.0).max(70.0))
                     .selected_text(target_label)
                     .show_ui(ui, |ui| {
                         if ui.selectable_label(rule.target.is_empty(), "All plotted series").clicked() && !rule.target.is_empty() {

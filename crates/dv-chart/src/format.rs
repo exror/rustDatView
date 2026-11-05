@@ -307,9 +307,39 @@ pub(crate) fn format_time_with_date(epoch: f64, step: f64) -> String {
     }
 }
 
+/// Read back what `format_time`, `format_duration` and `format_value(…, "s", …)`
+/// write: `h:mm:ss.f`, `m:ss.f`, or a number of seconds with an optional
+/// `s`, `ms`, `µs`/`us` or `ns` unit. Returns seconds.
+pub fn parse_seconds(text: &str) -> Option<f64> {
+    let text = text.trim().replace(',', "");
+    let (negative, text) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest.trim_start()),
+        None => (false, text.as_str()),
+    };
+    let (number, scale) = [("ns", 1e-9), ("µs", 1e-6), ("us", 1e-6), ("ms", 1e-3), ("s", 1.0)]
+        .into_iter()
+        .find_map(|(suffix, scale)| text.strip_suffix(suffix).map(|rest| (rest.trim_end(), scale)))
+        .unwrap_or((text, 1.0));
+    let parts: Vec<&str> = number.split(':').collect();
+    if parts.len() > 3 || (parts.len() > 1 && scale != 1.0) {
+        return None;
+    }
+    let mut total = 0.0;
+    for (index, part) in parts.iter().enumerate() {
+        let value: f64 = part.trim().parse().ok()?;
+        // Minutes and seconds after a colon stay below 60.
+        if !value.is_finite() || value < 0.0 || (index > 0 && value >= 60.0) {
+            return None;
+        }
+        total = total * 60.0 + value;
+    }
+    let seconds = total * scale;
+    Some(if negative { -seconds } else { seconds })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{format_duration, format_time, format_value};
+    use super::{format_duration, format_time, format_value, parse_seconds};
 
     #[test]
     fn formats_significant_values_and_preserves_existing_units() {
@@ -342,5 +372,21 @@ mod tests {
         assert_eq!(format_duration(0.25, 0.25), "0.25 s");
         assert_eq!(format_duration(-0.01, 1.0), "0 s");
         assert_eq!(format_duration(65.5, 0.1), "1:05.5");
+    }
+
+    #[test]
+    fn parsed_seconds_round_trip_formatted_times() {
+        assert_eq!(parse_seconds(&format_duration(-3723.456, 0.001)), Some(-3723.456));
+        assert_eq!(parse_seconds(&format_duration(65.5, 0.1)), Some(65.5));
+        let close = |text: &str, expected: f64| {
+            parse_seconds(text).is_some_and(|value| (value - expected).abs() <= expected.abs() * 1e-12)
+        };
+        assert!(close(&format_value(0.0012, "s", 6), 0.0012));
+        assert!(close("12 µs", 12e-6));
+        assert_eq!(parse_seconds("1,234.5 s"), Some(1234.5));
+        assert_eq!(parse_seconds("23:59:59.875"), Some(86_399.875));
+        assert_eq!(parse_seconds("1:75"), None);
+        assert_eq!(parse_seconds("1:05 ms"), None);
+        assert_eq!(parse_seconds("soon"), None);
     }
 }

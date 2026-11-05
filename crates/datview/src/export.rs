@@ -73,14 +73,6 @@ pub(crate) enum FigureTheme {
 }
 
 impl FigureTheme {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Light => "Light",
-            Self::Dark => "Dark",
-            Self::MatchApp => "Match app",
-        }
-    }
-
     fn is_dark(self, app_dark: bool) -> bool {
         match self {
             Self::Light => false,

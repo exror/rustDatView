@@ -839,94 +839,89 @@ fn screen_vertices(
     cached.screen = Some((key, Arc::clone(&points)));
     points
 }
-fn draw_marks(canvas: &mut dyn Canvas, pane: &PaneLayout, marks: &[Mark], theme: &ChartTheme) {
+/// Marks are drawn in two passes: shapes under the data, labels over it.
+/// Region and event labels appear once, in the top pane, so stacked panes
+/// are not littered with copies. Labels that would overlap an earlier label
+/// move down a row.
+fn draw_marks(canvas: &mut dyn Canvas, pane: &PaneLayout, marks: &[Mark], theme: &ChartTheme, labels: bool, top: bool) {
+    let size = theme.font_size - 0.5;
+    let height = size + 8.0;
+    let mut placed: Vec<Rect> = Vec::new();
+    let mut label = |canvas: &mut dyn Canvas, pos: Pos2, text: &str, color: Color32| {
+        if text.is_empty() {
+            return;
+        }
+        let width = canvas.measure_text(text, size, false).x + 12.0;
+        let mut rect = Rect::from_min_size(pos, Vec2::new(width, height));
+        for _ in 0..4 {
+            if !placed.iter().any(|other| other.expand(1.0).intersects(rect)) {
+                break;
+            }
+            rect = rect.translate(Vec2::new(0.0, height + 3.0));
+        }
+        placed.push(rect);
+        pill(canvas, rect.min, text, color, theme.surface, size);
+    };
+    let width_of = |canvas: &mut dyn Canvas, text: &str| canvas.measure_text(text, size, false).x + 12.0;
     for mark in marks {
         match mark {
-            Mark::Point {
-                pane: id,
-                x,
-                y,
-                label,
-                color,
-            } if id.is_none() || *id == Some(pane.id) => {
+            Mark::Point { pane: id, x, y, label: text, color } if id.is_none() || *id == Some(pane.id) => {
                 if let Some((px, py)) = pane.x.x(pane.plot, *x).zip(pane.y.y(pane.plot, *y)) {
-                    let p = Pos2::new(px, py);
-                    canvas.circle(p, 4.0, *color, Stroke::new(1.5, theme.surface));
-                    pill(
-                        canvas,
-                        p + Vec2::new(6.0, -22.0),
-                        label,
-                        *color,
-                        theme.surface,
-                        theme.font_size,
-                    );
+                    if labels {
+                        canvas.circle(Pos2::new(px, py), 4.0, *color, Stroke::new(1.5, theme.surface));
+                        // Keep the label inside the plot: flip left near the right edge.
+                        let w = width_of(canvas, text);
+                        let lx = if px + 6.0 + w > pane.plot.right() { px - 6.0 - w } else { px + 6.0 };
+                        label(canvas, Pos2::new(lx, (py - 22.0).max(pane.plot.top() + 2.0)), text, *color);
+                    }
                 }
             }
-            Mark::Region {
-                x0,
-                x1,
-                label,
-                color,
-            } => {
+            Mark::Region { x0, x1, label: text, color } => {
                 if let Some((a, b)) = pane.x.x(pane.plot, *x0).zip(pane.x.x(pane.plot, *x1)) {
                     let r = Rect::from_min_max(
                         Pos2::new(a.min(b), pane.plot.top()),
                         Pos2::new(a.max(b), pane.plot.bottom()),
                     );
-                    canvas.fill_rect(r, 0.0, color.gamma_multiply(0.14));
-                    line(canvas, r.left_top(), r.left_bottom(), *color, 1.0);
-                    line(canvas, r.right_top(), r.right_bottom(), *color, 1.0);
-                    pill(
-                        canvas,
-                        r.left_top() + Vec2::new(3.0, 3.0),
-                        label,
-                        *color,
-                        theme.surface,
-                        theme.font_size,
-                    );
+                    if !labels {
+                        canvas.fill_rect(r, 0.0, color.gamma_multiply(0.14));
+                        line(canvas, r.left_top(), r.left_bottom(), color.gamma_multiply(0.7), 1.0);
+                        line(canvas, r.right_top(), r.right_bottom(), color.gamma_multiply(0.7), 1.0);
+                    } else if top {
+                        let w = width_of(canvas, text);
+                        let x = if r.width() > w + 8.0 { r.center().x - w * 0.5 } else { r.left() + 3.0 };
+                        label(canvas, Pos2::new(x, r.top() + 3.0), text, *color);
+                    }
                 }
             }
-            Mark::VLine { x, label, color } => {
+            Mark::VLine { x, label: text, color } => {
                 if let Some(px) = pane.x.x(pane.plot, *x) {
-                    line(
-                        canvas,
-                        Pos2::new(px, pane.plot.top()),
-                        Pos2::new(px, pane.plot.bottom()),
-                        *color,
-                        1.0,
-                    );
-                    pill(
-                        canvas,
-                        Pos2::new(px + 3.0, pane.plot.top() + 3.0),
-                        label,
-                        *color,
-                        theme.surface,
-                        theme.font_size,
-                    );
+                    if !labels {
+                        canvas.polyline(
+                            &[Pos2::new(px, pane.plot.top()), Pos2::new(px, pane.plot.bottom())],
+                            Stroke::new(1.2, *color),
+                            Dash::Dashed,
+                        );
+                    } else if top {
+                        let w = width_of(canvas, text);
+                        let lx = if px + 3.0 + w > pane.plot.right() { px - 3.0 - w } else { px + 3.0 };
+                        label(canvas, Pos2::new(lx, pane.plot.top() + 3.0), text, *color);
+                    }
                 }
             }
-            Mark::HLine {
-                pane: id,
-                y,
-                label,
-                color,
-            } if *id == pane.id => {
+            Mark::HLine { pane: id, y, label: text, color } if *id == pane.id => {
                 if let Some(py) = pane.y.y(pane.plot, *y) {
-                    line(
-                        canvas,
-                        Pos2::new(pane.plot.left(), py),
-                        Pos2::new(pane.plot.right(), py),
-                        *color,
-                        1.0,
-                    );
-                    pill(
-                        canvas,
-                        Pos2::new(pane.plot.left() + 3.0, py + 3.0),
-                        label,
-                        *color,
-                        theme.surface,
-                        theme.font_size,
-                    );
+                    if !labels {
+                        canvas.polyline(
+                            &[Pos2::new(pane.plot.left(), py), Pos2::new(pane.plot.right(), py)],
+                            Stroke::new(1.2, *color),
+                            Dash::Dashed,
+                        );
+                    } else {
+                        // Right-aligned above the line, below it when at the top edge.
+                        let w = width_of(canvas, text);
+                        let ly = if py - height - 3.0 < pane.plot.top() { py + 3.0 } else { py - height - 3.0 };
+                        label(canvas, Pos2::new(pane.plot.right() - w - 4.0, ly), text, *color);
+                    }
                 }
             }
             _ => {}
@@ -1023,7 +1018,8 @@ fn draw(
                 );
             }
         }
-        draw_marks(canvas, pl, marks, theme);
+        let top = layout.panes.first().is_some_and(|first| first.id == pl.id);
+        draw_marks(canvas, pl, marks, theme, false, top);
         for series in &pane.series {
             if !series.visible || state.hidden.contains(&series.id) {
                 continue;
@@ -1057,6 +1053,7 @@ fn draw(
                 }
             }
         }
+        draw_marks(canvas, pl, marks, theme, true, top);
         if pl.all_hidden {
             canvas.text(
                 pl.plot.center(),
