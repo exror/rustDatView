@@ -386,11 +386,12 @@ mod tests {
 
     #[test]
     fn genuine_fast_and_hawc_text_precede_generic_csv() {
+        // Example files from pyDatView (MIT), kept in tests/fixtures.
         let fast = Fixture::new(
             "txt",
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../upstream/example_files/FASTIn_arf_coords.txt"
+                "/tests/fixtures/FASTIn_arf_coords.txt"
             )),
         );
         let file = read_file(&fast.0, None).unwrap();
@@ -403,7 +404,7 @@ mod tests {
             "txt",
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../upstream/example_files/HAWCStab2.pwr"
+                "/tests/fixtures/HAWCStab2.pwr"
             )),
         );
         let file = read_file(&power.0, None).unwrap();
