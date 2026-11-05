@@ -149,7 +149,7 @@ fn timestamp(value: &str, format: &mut Option<DateTimeFormat>, line: u64) -> Res
     format
         .as_ref()
         .and_then(|format| format.parse(value))
-        .ok_or_else(|| broken_at(line, format!("invalid timestamp {value:?}")))
+        .ok_or_else(|| broken_at(line, format!("invalid timestamp “{value}”")))
 }
 
 /// Read a typed MSI Afterburner hardware-monitoring log.
@@ -297,7 +297,7 @@ fn parse(path: &Path, bytes: &[u8]) -> Result<Arc<dyn FileObject>, IoError> {
                         f64::NAN
                     } else {
                         value.parse::<f64>().map_err(|_| {
-                            broken_at(line, format!("invalid value {value:?} for channel {index}"))
+                            broken_at(line, format!("invalid value “{value}” for channel {index}"))
                         })?
                     };
                     column.push(parsed);

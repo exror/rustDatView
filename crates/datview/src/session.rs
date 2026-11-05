@@ -363,12 +363,12 @@ impl Session {
         for entry in &self.sources {
             let source = &entry.source;
             if entry.generated != source.path.as_os_str().is_empty() {
-                return Err(format!("Invalid source {:?}: generated sources must have no file path, and file sources must have one", source.name));
+                return Err(format!("Invalid source “{}”: generated sources must have no file path, and file sources must have one", source.name));
             }
             if let Some(format) = &source.format {
                 if format.is_empty() {
                     return Err(format!(
-                        "Invalid empty format for source {:?}; use null for automatic detection",
+                        "Invalid empty format for source “{}”; use null for automatic detection",
                         source.name
                     ));
                 }
@@ -392,7 +392,7 @@ impl Session {
             }
             if let Some(formula) = entry.formulas.iter().find(|formula| formula.pos == 0) {
                 return Err(format!(
-                    "Invalid position 0 for formula {:?} in source {:?}",
+                    "Invalid position 0 for formula “{}” in source “{}”",
                     formula.name, source.name
                 ));
             }
@@ -631,12 +631,12 @@ impl Restore {
             if entry.source.recipe.is_some() {
                 format!("Could not regenerate “{}”: a parent source is missing or the source operation failed", entry.source.name)
             } else {
-                format!("Could not regenerate session source {:?} (frame {} {:?}); see pipeline errors",
-                    entry.source.name, entry.source.frame, entry.source.frame_name)
+                format!("Could not regenerate “{}”; see the processing errors", entry.source.name)
             }
         } else {
-            format!("Could not restore session source {:?} from {} (frame {} {:?}); see file loading errors",
-                entry.source.name, entry.source.path.display(), entry.source.frame, entry.source.frame_name)
+            let sheet = if entry.source.frame_name.is_empty() { String::new() } else { format!(" (sheet “{}”)", entry.source.frame_name) };
+            format!("Could not restore “{}”{sheet} from {}; see the file loading errors",
+                entry.source.name, entry.source.path.display())
         };
         workspace.problems.push(reason.clone());
         self.unresolved.push(UnresolvedSource {
@@ -712,7 +712,7 @@ impl Restore {
                     Ok(()) => {}
                     Err(error) => {
                         errors.push(format!(
-                            "Formula {:?} failed for {}: {error}",
+                            "Formula “{}” failed for {}: {error}",
                             formula.name, failure.source.name
                         ));
                         remaining.push(formula);

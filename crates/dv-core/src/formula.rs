@@ -36,6 +36,24 @@ enum Tok {
     Comma,
 }
 
+/// Tokens as the user typed them, for error messages.
+impl std::fmt::Display for Tok {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Tok::Num(value) => write!(f, "`{value}`"),
+            Tok::Str(text) => write!(f, "`'{text}'`"),
+            Tok::Col(name) => write!(f, "`{{{name}}}`"),
+            Tok::Ident(name) => write!(f, "`{name}`"),
+            Tok::Op(op) => write!(f, "`{op}`"),
+            Tok::LParen => f.write_str("`(`"),
+            Tok::RParen => f.write_str("`)`"),
+            Tok::LBracket => f.write_str("`[`"),
+            Tok::RBracket => f.write_str("`]`"),
+            Tok::Comma => f.write_str("`,`"),
+        }
+    }
+}
+
 fn tokenize(s: &str) -> Result<Vec<Tok>> {
     let c: Vec<char> = s.chars().collect();
     let mut i = 0;
@@ -817,7 +835,7 @@ impl<'a> Ctx<'a> {
                     _ => Err(DvError::Formula(format!("unknown name `{id}`"))),
                 }
             }
-            Some(t) => Err(DvError::Formula(format!("unexpected token {t:?}"))),
+            Some(t) => Err(DvError::Formula(format!("unexpected {t}"))),
             None => Err(DvError::Formula("unexpected end of expression".into())),
         }
     }
@@ -835,7 +853,7 @@ fn eval_val(df: &DataFrame, expr: &str) -> Result<Val> {
     let v = ctx.or()?;
     if ctx.pos < ctx.toks.len() {
         return Err(DvError::Formula(format!(
-            "unexpected trailing token {:?}",
+            "unexpected {} after a complete expression",
             ctx.toks[ctx.pos]
         )));
     }
