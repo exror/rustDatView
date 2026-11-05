@@ -320,10 +320,16 @@ fn axis_for(range: [f64; 2], scale: Scale, flip: bool) -> Axis {
     }
 }
 /// "POWER · W": the quantity is set in small caps style, the unit keeps its
-/// case (MHz, W²/Hz) because case is meaningful in unit symbols.
+/// case (MHz, W²/Hz) because case is meaningful in unit symbols. A title that
+/// is only a unit symbol (Pa, A·s, m²/Hz) keeps its case too.
 fn pane_heading(pane: &Pane<'_>) -> String {
+    let symbol_like = |text: &str| {
+        !text.contains(char::is_whitespace)
+            && (text.chars().count() <= 4 || text.contains(['·', '/', '²', '³', 'µ', '°', '%']))
+    };
     let title = match pane.title.split_once(" · ") {
         Some((quantity, unit)) => format!("{} · {unit}", quantity.to_uppercase()),
+        None if symbol_like(pane.title) => pane.title.to_owned(),
         None => pane.title.to_uppercase(),
     };
     match (title.is_empty(), pane.y_label.is_empty()) {

@@ -324,6 +324,15 @@ fn infer_schema_units(names: &mut [String], header: &[String], sensor_ids: Optio
         if let Some(unit) = unit {
             *name = append_unit(name, unit);
         }
+        // A bare `C` means °C everywhere else; on a charge it is coulombs.
+        if name.to_ascii_lowercase().contains("charge") {
+            let trimmed = name.trim_end();
+            if let Some(label) = trimmed.strip_suffix("[C]") {
+                *name = format!("{label}[A·s]");
+            } else if let Some(label) = trimmed.strip_suffix("(C)") {
+                *name = format!("{label}(A·s)");
+            }
+        }
     }
 }
 

@@ -25,6 +25,7 @@ pub enum UnitFamily {
     Throughput,
     Time,
     Energy,
+    Charge,
     FrameRate,
     Boolean,
     Dimensionless,
@@ -45,6 +46,7 @@ impl fmt::Display for UnitFamily {
             Self::Throughput => "Throughput",
             Self::Time => "Time",
             Self::Energy => "Energy",
+            Self::Charge => "Charge",
             Self::FrameRate => "Frame rate",
             Self::Boolean => "Flags",
             Self::Dimensionless => "Other",
@@ -344,6 +346,9 @@ pub fn parse_unit(input: &str) -> UnitInfo {
             "Wh",
             3_600.0,
         ),
+        // Coulombs are written A·s: a bare `C` is read as °C.
+        (Charge, &["coulombs", "coulomb", "A·s", "A*s", "As"][..], "A·s", 1.0),
+        (Charge, &["amp-hours", "amp-hour", "Ah"][..], "Ah", 3_600.0),
     ] {
         if let Some((symbol, factor)) = scaled_unit(input, aliases, canonical) {
             return UnitInfo::new(family, symbol, factor * multiplier, 0.0);
@@ -678,6 +683,8 @@ mod tests {
             ("MiB / sec", UnitFamily::Throughput, "MiB/s", 1_048_576.0),
             ("Mbps", UnitFamily::Throughput, "Mb/s", 125_000.0),
             ("kWh", UnitFamily::Energy, "kWh", 3_600_000.0),
+            ("[A·s]", UnitFamily::Charge, "A·s", 1.0),
+            ("mAh", UnitFamily::Charge, "mAh", 3.6),
         ] {
             let parsed = parse_unit(input);
             assert_eq!(
