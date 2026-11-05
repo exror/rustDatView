@@ -347,7 +347,12 @@ pub fn parse_unit(input: &str) -> UnitInfo {
             3_600.0,
         ),
         // Coulombs are written A·s: a bare `C` is read as °C.
-        (Charge, &["coulombs", "coulomb", "A·s", "A*s", "As"][..], "A·s", 1.0),
+        (
+            Charge,
+            &["coulombs", "coulomb", "A·s", "A*s", "As"][..],
+            "A·s",
+            1.0,
+        ),
         (Charge, &["amp-hours", "amp-hour", "Ah"][..], "Ah", 3_600.0),
     ] {
         if let Some((symbol, factor)) = scaled_unit(input, aliases, canonical) {

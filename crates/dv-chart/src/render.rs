@@ -365,7 +365,13 @@ fn legend_layout(
         canvas.measure_text(&heading, size - 1.0, true).x + 16.0
     };
     let row = size + 9.0;
-    let max_rows = if rect.height() > 300.0 { 3 } else if rect.height() > 150.0 { 2 } else { 1 };
+    let max_rows = if rect.height() > 300.0 {
+        3
+    } else if rect.height() > 150.0 {
+        2
+    } else {
+        1
+    };
     let more_width = canvas.measure_text("+888 more", size, false).x + 14.0;
     let mut x = left + title;
     let mut y = top;
@@ -386,10 +392,17 @@ fn legend_layout(
         let last_row = rows == max_rows;
         let remaining = entries.len() - index;
         // On the last row keep room for the overflow chip unless this is the final entry.
-        let reserve = if last_row && remaining > 1 { more_width + 4.0 } else { 0.0 };
+        let reserve = if last_row && remaining > 1 {
+            more_width + 4.0
+        } else {
+            0.0
+        };
         if x > left + title && x + width + reserve > rect.right() - 4.0 {
             if last_row {
-                more = Some((Rect::from_min_size(Pos2::new(x, y), Vec2::new(more_width, row)), remaining));
+                more = Some((
+                    Rect::from_min_size(Pos2::new(x, y), Vec2::new(more_width, row)),
+                    remaining,
+                ));
                 right = right.max(x + more_width);
                 break;
             }
@@ -476,21 +489,33 @@ fn layout(
     for pane in panes {
         for series in &pane.series {
             if series.visible {
-                let needs_index = state.runtime.caches.get(&series.id)
+                let needs_index = state
+                    .runtime
+                    .caches
+                    .get(&series.id)
                     .is_none_or(|cached| !cached.matches(series, config.gap_factor));
-                let shared = needs_index.then(|| {
-                    panes.iter().flat_map(|pane| &pane.series).find_map(|other| {
-                        if other.id == series.id
-                            || other.x.as_ptr() != series.x.as_ptr()
-                            || other.x.len().min(other.y.len()) != series.x.len().min(series.y.len())
-                        {
-                            return None;
-                        }
-                        state.runtime.caches.get(&other.id)
-                            .filter(|cached| cached.matches(other, config.gap_factor))
-                            .map(|cached| Arc::clone(&cached.x_info))
+                let shared = needs_index
+                    .then(|| {
+                        panes
+                            .iter()
+                            .flat_map(|pane| &pane.series)
+                            .find_map(|other| {
+                                if other.id == series.id
+                                    || other.x.as_ptr() != series.x.as_ptr()
+                                    || other.x.len().min(other.y.len())
+                                        != series.x.len().min(series.y.len())
+                                {
+                                    return None;
+                                }
+                                state
+                                    .runtime
+                                    .caches
+                                    .get(&other.id)
+                                    .filter(|cached| cached.matches(other, config.gap_factor))
+                                    .map(|cached| Arc::clone(&cached.x_info))
+                            })
                     })
-                }).flatten();
+                    .flatten();
                 cache_with_x_info(&mut state.runtime.caches, series, config.gap_factor, shared);
             }
         }
@@ -660,15 +685,23 @@ fn layout(
         } else {
             pane_rect
         };
-        let (legend, legend_rect, legend_more) = legend_layout(canvas, pane, legend_area, config, theme);
+        let (legend, legend_rect, legend_more) =
+            legend_layout(canvas, pane, legend_area, config, theme);
         let header = legend_rect.map_or(0.0, |r| (r.bottom() - pane_rect.top() + 3.0).min(h * 0.5));
         // Unlinked panes (distributions of different quantities) need their
         // own X labels; every pane but the last reserves a row for them.
         let own_x_axis = !config.link_x && i + 1 < prepared_len;
-        let own_axis_height = if own_x_axis { theme.font_size + 10.0 } else { 0.0 };
+        let own_axis_height = if own_x_axis {
+            theme.font_size + 10.0
+        } else {
+            0.0
+        };
         let plot = Rect::from_min_max(
             Pos2::new(left, y_top + header),
-            Pos2::new(right, (y_top + h - own_axis_height).max(y_top + header + 1.0)),
+            Pos2::new(
+                right,
+                (y_top + h - own_axis_height).max(y_top + header + 1.0),
+            ),
         );
         if config.equal_aspect && x.scale == Scale::Linear && y.scale == Scale::Linear {
             let desired =
@@ -859,7 +892,14 @@ fn screen_vertices(
 /// Region and event labels appear once, in the top pane, so stacked panes
 /// are not littered with copies. Labels that would overlap an earlier label
 /// move down a row.
-fn draw_marks(canvas: &mut dyn Canvas, pane: &PaneLayout, marks: &[Mark], theme: &ChartTheme, labels: bool, top: bool) {
+fn draw_marks(
+    canvas: &mut dyn Canvas,
+    pane: &PaneLayout,
+    marks: &[Mark],
+    theme: &ChartTheme,
+    labels: bool,
+    top: bool,
+) {
     let size = theme.font_size - 0.5;
     let height = size + 8.0;
     let mut placed: Vec<Rect> = Vec::new();
@@ -870,7 +910,10 @@ fn draw_marks(canvas: &mut dyn Canvas, pane: &PaneLayout, marks: &[Mark], theme:
         let width = canvas.measure_text(text, size, false).x + 12.0;
         let mut rect = Rect::from_min_size(pos, Vec2::new(width, height));
         for _ in 0..4 {
-            if !placed.iter().any(|other| other.expand(1.0).intersects(rect)) {
+            if !placed
+                .iter()
+                .any(|other| other.expand(1.0).intersects(rect))
+            {
                 break;
             }
             rect = rect.translate(Vec2::new(0.0, height + 3.0));
@@ -878,21 +921,47 @@ fn draw_marks(canvas: &mut dyn Canvas, pane: &PaneLayout, marks: &[Mark], theme:
         placed.push(rect);
         pill(canvas, rect.min, text, color, theme.surface, size);
     };
-    let width_of = |canvas: &mut dyn Canvas, text: &str| canvas.measure_text(text, size, false).x + 12.0;
+    let width_of =
+        |canvas: &mut dyn Canvas, text: &str| canvas.measure_text(text, size, false).x + 12.0;
     for mark in marks {
         match mark {
-            Mark::Point { pane: id, x, y, label: text, color } if id.is_none() || *id == Some(pane.id) => {
+            Mark::Point {
+                pane: id,
+                x,
+                y,
+                label: text,
+                color,
+            } if id.is_none() || *id == Some(pane.id) => {
                 if let Some((px, py)) = pane.x.x(pane.plot, *x).zip(pane.y.y(pane.plot, *y)) {
                     if labels {
-                        canvas.circle(Pos2::new(px, py), 4.0, *color, Stroke::new(1.5, theme.surface));
+                        canvas.circle(
+                            Pos2::new(px, py),
+                            4.0,
+                            *color,
+                            Stroke::new(1.5, theme.surface),
+                        );
                         // Keep the label inside the plot: flip left near the right edge.
                         let w = width_of(canvas, text);
-                        let lx = if px + 6.0 + w > pane.plot.right() { px - 6.0 - w } else { px + 6.0 };
-                        label(canvas, Pos2::new(lx, (py - 22.0).max(pane.plot.top() + 2.0)), text, *color);
+                        let lx = if px + 6.0 + w > pane.plot.right() {
+                            px - 6.0 - w
+                        } else {
+                            px + 6.0
+                        };
+                        label(
+                            canvas,
+                            Pos2::new(lx, (py - 22.0).max(pane.plot.top() + 2.0)),
+                            text,
+                            *color,
+                        );
                     }
                 }
             }
-            Mark::Region { x0, x1, label: text, color } => {
+            Mark::Region {
+                x0,
+                x1,
+                label: text,
+                color,
+            } => {
                 if let Some((a, b)) = pane.x.x(pane.plot, *x0).zip(pane.x.x(pane.plot, *x1)) {
                     let r = Rect::from_min_max(
                         Pos2::new(a.min(b), pane.plot.top()),
@@ -900,43 +969,87 @@ fn draw_marks(canvas: &mut dyn Canvas, pane: &PaneLayout, marks: &[Mark], theme:
                     );
                     if !labels {
                         canvas.fill_rect(r, 0.0, color.gamma_multiply(0.14));
-                        line(canvas, r.left_top(), r.left_bottom(), color.gamma_multiply(0.7), 1.0);
-                        line(canvas, r.right_top(), r.right_bottom(), color.gamma_multiply(0.7), 1.0);
+                        line(
+                            canvas,
+                            r.left_top(),
+                            r.left_bottom(),
+                            color.gamma_multiply(0.7),
+                            1.0,
+                        );
+                        line(
+                            canvas,
+                            r.right_top(),
+                            r.right_bottom(),
+                            color.gamma_multiply(0.7),
+                            1.0,
+                        );
                     } else if top {
                         let w = width_of(canvas, text);
-                        let x = if r.width() > w + 8.0 { r.center().x - w * 0.5 } else { r.left() + 3.0 };
+                        let x = if r.width() > w + 8.0 {
+                            r.center().x - w * 0.5
+                        } else {
+                            r.left() + 3.0
+                        };
                         label(canvas, Pos2::new(x, r.top() + 3.0), text, *color);
                     }
                 }
             }
-            Mark::VLine { x, label: text, color } => {
+            Mark::VLine {
+                x,
+                label: text,
+                color,
+            } => {
                 if let Some(px) = pane.x.x(pane.plot, *x) {
                     if !labels {
                         canvas.polyline(
-                            &[Pos2::new(px, pane.plot.top()), Pos2::new(px, pane.plot.bottom())],
+                            &[
+                                Pos2::new(px, pane.plot.top()),
+                                Pos2::new(px, pane.plot.bottom()),
+                            ],
                             Stroke::new(1.2, *color),
                             Dash::Dashed,
                         );
                     } else if top {
                         let w = width_of(canvas, text);
-                        let lx = if px + 3.0 + w > pane.plot.right() { px - 3.0 - w } else { px + 3.0 };
+                        let lx = if px + 3.0 + w > pane.plot.right() {
+                            px - 3.0 - w
+                        } else {
+                            px + 3.0
+                        };
                         label(canvas, Pos2::new(lx, pane.plot.top() + 3.0), text, *color);
                     }
                 }
             }
-            Mark::HLine { pane: id, y, label: text, color } if *id == pane.id => {
+            Mark::HLine {
+                pane: id,
+                y,
+                label: text,
+                color,
+            } if *id == pane.id => {
                 if let Some(py) = pane.y.y(pane.plot, *y) {
                     if !labels {
                         canvas.polyline(
-                            &[Pos2::new(pane.plot.left(), py), Pos2::new(pane.plot.right(), py)],
+                            &[
+                                Pos2::new(pane.plot.left(), py),
+                                Pos2::new(pane.plot.right(), py),
+                            ],
                             Stroke::new(1.2, *color),
                             Dash::Dashed,
                         );
                     } else {
                         // Right-aligned above the line, below it when at the top edge.
                         let w = width_of(canvas, text);
-                        let ly = if py - height - 3.0 < pane.plot.top() { py + 3.0 } else { py - height - 3.0 };
-                        label(canvas, Pos2::new(pane.plot.right() - w - 4.0, ly), text, *color);
+                        let ly = if py - height - 3.0 < pane.plot.top() {
+                            py + 3.0
+                        } else {
+                            py - height - 3.0
+                        };
+                        label(
+                            canvas,
+                            Pos2::new(pane.plot.right() - w - 4.0, ly),
+                            text,
+                            *color,
+                        );
                     }
                 }
             }
@@ -1242,7 +1355,14 @@ fn draw(
             }
             if let Some((chip, count)) = pl.legend_more {
                 canvas.fill_rect(chip.shrink2(Vec2::new(0.0, 2.0)), 6.0, theme.legend_bg);
-                canvas.text(chip.center(), Anchor::CenterCenter, &format!("+{count} more"), theme.font_size - 0.5, theme.text_muted, false);
+                canvas.text(
+                    chip.center(),
+                    Anchor::CenterCenter,
+                    &format!("+{count} more"),
+                    theme.font_size - 0.5,
+                    theme.text_muted,
+                    false,
+                );
             }
         }
         let pane_area = pl
@@ -1443,25 +1563,61 @@ fn draw(
     // With a truncated legend, hovering a pane lists every value of that pane.
     // Drawn after all panes so neighbouring panes cannot paint over it.
     for pl in &layout.panes {
-        let Some(pane) = panes.iter().find(|p| p.id == pl.id) else { continue };
-        if let (Some(_), Some(hover), Some(pos)) = (pl.legend_more, hover, pointer.filter(|p| pl.plot.contains(*p))) {
-            let rows: Vec<(&Series<'_>, f64)> = pane.series.iter()
+        let Some(pane) = panes.iter().find(|p| p.id == pl.id) else {
+            continue;
+        };
+        if let (Some(_), Some(hover), Some(pos)) = (
+            pl.legend_more,
+            hover,
+            pointer.filter(|p| pl.plot.contains(*p)),
+        ) {
+            let rows: Vec<(&Series<'_>, f64)> = pane
+                .series
+                .iter()
                 .filter(|s| s.visible && !s.overlay && !state.hidden.contains(&s.id))
-                .filter_map(|s| hover.values.iter().find(|(id, _, _, _)| *id == s.id).map(|(_, _, _, v)| (s, *v)))
+                .filter_map(|s| {
+                    hover
+                        .values
+                        .iter()
+                        .find(|(id, _, _, _)| *id == s.id)
+                        .map(|(_, _, _, v)| (s, *v))
+                })
                 .collect();
             if !rows.is_empty() {
                 let size = theme.font_size;
                 let line = size + 6.0;
-                let shown = rows.len().min(((layout.rect.height() - 24.0) / line).max(1.0) as usize);
-                let texts: Vec<(String, String)> = rows.iter().take(shown)
-                    .map(|(s, v)| (s.label.to_owned(), format::format_value(*v, s.unit, config.precision)))
+                let shown = rows
+                    .len()
+                    .min(((layout.rect.height() - 24.0) / line).max(1.0) as usize);
+                let texts: Vec<(String, String)> = rows
+                    .iter()
+                    .take(shown)
+                    .map(|(s, v)| {
+                        (
+                            s.label.to_owned(),
+                            format::format_value(*v, s.unit, config.precision),
+                        )
+                    })
                     .collect();
-                let label_width = texts.iter().map(|(l, _)| canvas.measure_text(l, size, false).x).fold(0.0_f32, f32::max);
-                let value_width = texts.iter().map(|(_, v)| canvas.measure_text(v, size, true).x).fold(0.0_f32, f32::max);
+                let label_width = texts
+                    .iter()
+                    .map(|(l, _)| canvas.measure_text(l, size, false).x)
+                    .fold(0.0_f32, f32::max);
+                let value_width = texts
+                    .iter()
+                    .map(|(_, v)| canvas.measure_text(v, size, true).x)
+                    .fold(0.0_f32, f32::max);
                 let width = 36.0 + label_width + value_width;
                 let height = shown as f32 * line + 12.0;
-                let x = if pos.x + 18.0 + width < layout.rect.right() { pos.x + 18.0 } else { pos.x - 18.0 - width };
-                let y = (pos.y - height * 0.5).clamp(layout.rect.top() + 4.0, (layout.rect.bottom() - height - 4.0).max(layout.rect.top()));
+                let x = if pos.x + 18.0 + width < layout.rect.right() {
+                    pos.x + 18.0
+                } else {
+                    pos.x - 18.0 - width
+                };
+                let y = (pos.y - height * 0.5).clamp(
+                    layout.rect.top() + 4.0,
+                    (layout.rect.bottom() - height - 4.0).max(layout.rect.top()),
+                );
                 let card = Rect::from_min_size(Pos2::new(x, y), Vec2::new(width, height));
                 // Opaque, outlined card: values must stay readable over dense traces.
                 canvas.fill_rect(card.expand(1.0), 8.0, theme.axis_line);
@@ -1469,9 +1625,28 @@ fn draw(
                 canvas.fill_rect(card, 7.0, theme.legend_bg);
                 for (i, ((series, _), (label, value))) in rows.iter().zip(&texts).enumerate() {
                     let cy = card.top() + 6.0 + line * (i as f32 + 0.5);
-                    canvas.circle(Pos2::new(card.left() + 11.0, cy), 3.4, series.color, Stroke::NONE);
-                    canvas.text(Pos2::new(card.left() + 20.0, cy), Anchor::LeftCenter, label, size, theme.text, false);
-                    canvas.text(Pos2::new(card.right() - 8.0, cy), Anchor::RightCenter, value, size, series.color, true);
+                    canvas.circle(
+                        Pos2::new(card.left() + 11.0, cy),
+                        3.4,
+                        series.color,
+                        Stroke::NONE,
+                    );
+                    canvas.text(
+                        Pos2::new(card.left() + 20.0, cy),
+                        Anchor::LeftCenter,
+                        label,
+                        size,
+                        theme.text,
+                        false,
+                    );
+                    canvas.text(
+                        Pos2::new(card.right() - 8.0, cy),
+                        Anchor::RightCenter,
+                        value,
+                        size,
+                        series.color,
+                        true,
+                    );
                 }
             }
         }
@@ -1598,7 +1773,10 @@ fn hover_at(
                 let span = (pl.x.range[1] - pl.x.range[0]).abs();
                 let first = xs.iter().copied().find(|v| v.is_finite());
                 let last = xs.iter().rev().copied().find(|v| v.is_finite());
-                if first.zip(last).is_none_or(|(a, b)| x < a - span * 0.005 || x > b + span * 0.005) {
+                if first
+                    .zip(last)
+                    .is_none_or(|(a, b)| x < a - span * 0.005 || x > b + span * 0.005)
+                {
                     continue;
                 }
                 let i = xs.partition_point(|v| *v < x);
@@ -1688,7 +1866,10 @@ pub(crate) fn svg(
 ) -> String {
     let size = [size[0].max(1.0), size[1].max(1.0)];
     // The overview strip is a navigation control, not part of a figure.
-    let config = &ChartConfig { overview: false, ..config.clone() };
+    let config = &ChartConfig {
+        overview: false,
+        ..config.clone()
+    };
     let mut canvas = SvgCanvas::new(size, fonts);
     let mut state = state.clone();
     let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(size[0], size[1]));

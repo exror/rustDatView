@@ -192,8 +192,10 @@ impl RangeRule {
     }
     pub(crate) fn matches(&self, mode: Mode, key: &str, label: &str, id: u64) -> bool {
         let target_matches = self.target.is_empty()
-            || Self::target_id(&self.target)
-                .map_or_else(|| self.target == key || self.target == label, |target| target == id);
+            || Self::target_id(&self.target).map_or_else(
+                || self.target == key || self.target == label,
+                |target| target == id,
+            );
         self.enabled && self.mode == mode && target_matches
     }
     pub(crate) fn accepts(&self, x: f64, y: f64) -> bool {
@@ -211,7 +213,11 @@ impl RangeRule {
     }
 }
 
-pub(crate) fn arrange(series: &mut Vec<SeriesData>, sources: &[Source], settings: &mut PaneSettings) {
+pub(crate) fn arrange(
+    series: &mut Vec<SeriesData>,
+    sources: &[Source],
+    settings: &mut PaneSettings,
+) {
     series.retain(|item| !settings.removed.contains_key(&item.id));
     for s in series.iter() {
         settings
@@ -275,7 +281,11 @@ pub(crate) fn arrange(series: &mut Vec<SeriesData>, sources: &[Source], settings
         s.dash = settings
             .style_for(s.id, &s.key)
             .and_then(|style| style.dash)
-            .unwrap_or(if by_source { 0 } else { active_rank.get(s.source).copied().unwrap_or(0) % 4 });
+            .unwrap_or(if by_source {
+                0
+            } else {
+                active_rank.get(s.source).copied().unwrap_or(0) % 4
+            });
     }
 }
 fn channel_pane(channel: &str, unit: &str) -> String {
@@ -347,7 +357,10 @@ mod tests {
         assert_eq!(unit_pane("Other", "m²/Hz", "Spectrum"), "m²/Hz");
         assert_eq!(unit_pane("Other", "%", "Difference"), "%");
         assert_eq!(unit_pane("Other", "", "Speed"), "Speed");
-        assert_eq!(unit_pane("Power", "1/W", "CPU Package Power"), "Power · 1/W");
+        assert_eq!(
+            unit_pane("Power", "1/W", "CPU Package Power"),
+            "Power · 1/W"
+        );
         assert_eq!(unit_pane("Flags", "Yes/No", "Throttle"), "Flags");
         assert_eq!(channel_pane("CPU", "C"), "CPU · °C");
     }
@@ -355,28 +368,48 @@ mod tests {
     #[test]
     fn source_specific_styles_override_legacy_channel_styles() {
         let mut settings = PaneSettings::default();
-        settings.styles.insert("power".into(), SeriesStyle {
-            width: Some(1.5), ..Default::default()
-        });
+        settings.styles.insert(
+            "power".into(),
+            SeriesStyle {
+                width: Some(1.5),
+                ..Default::default()
+            },
+        );
         let key = PaneSettings::series_style_key(7);
         settings.series_style_keys.insert(7, key.clone());
-        settings.styles.insert(key, SeriesStyle {
-            width: Some(3.0), ..Default::default()
-        });
-        assert_eq!(settings.style_for(7, "power").and_then(|s| s.width), Some(3.0));
-        assert_eq!(settings.style_for(8, "power").and_then(|s| s.width), Some(1.5));
+        settings.styles.insert(
+            key,
+            SeriesStyle {
+                width: Some(3.0),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            settings.style_for(7, "power").and_then(|s| s.width),
+            Some(3.0)
+        );
+        assert_eq!(
+            settings.style_for(8, "power").and_then(|s| s.width),
+            Some(1.5)
+        );
     }
 
     #[test]
     fn reference_and_event_marks_round_trip() {
         let marks = vec![
             Annotation::VLine {
-                mode: Mode::Signals, x_axis: "time".into(), x: 12.5,
-                label: "Load starts".into(), color: [66, 101, 218],
+                mode: Mode::Signals,
+                x_axis: "time".into(),
+                x: 12.5,
+                label: "Load starts".into(),
+                color: [66, 101, 218],
             },
             Annotation::HLine {
-                mode: Mode::Signals, pane: "Temperature · °C".into(), y: 100.0,
-                label: "TjMax".into(), color: [239, 121, 48],
+                mode: Mode::Signals,
+                pane: "Temperature · °C".into(),
+                y: 100.0,
+                label: "TjMax".into(),
+                color: [239, 121, 48],
             },
         ];
         let json = serde_json::to_string(&marks).expect("serialize marks");

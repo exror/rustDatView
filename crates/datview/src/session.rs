@@ -106,7 +106,11 @@ impl Session {
             .zip(&workspace.tables.tabs)
             .enumerate()
         {
-            let pipeline_generated = workspace.pipeline.actions.iter().any(|action| action.generated_table(table));
+            let pipeline_generated = workspace
+                .pipeline
+                .actions
+                .iter()
+                .any(|action| action.generated_table(table));
             let generated = source.path.as_os_str().is_empty();
             if generated && !pipeline_generated && source.recipe.is_none() {
                 // Analysis results have no reproducible recipe; the app reports
@@ -283,7 +287,12 @@ impl Session {
             .selected
             .iter()
             .chain(self.panes.slots.keys())
-            .chain(self.panes.styles.keys().filter(|key| RangeRule::target_id(key).is_none()))
+            .chain(
+                self.panes
+                    .styles
+                    .keys()
+                    .filter(|key| RangeRule::target_id(key).is_none()),
+            )
             .chain(self.panes.colors.keys())
             .chain(self.panes.custom.keys())
             .cloned()
@@ -300,9 +309,7 @@ impl Session {
                 entry.source.path = replacement.clone();
                 let new_slot = entry.source.stable_key();
                 if let Some(slot) = self.panes.source_slots.remove(&old_slot) {
-                    self.panes
-                        .source_slots
-                        .insert(new_slot.clone(), slot);
+                    self.panes.source_slots.insert(new_slot.clone(), slot);
                 }
                 relocated_parents.push((old_slot, new_slot));
                 for (key, previous) in keys.iter().zip(old_ids) {
@@ -322,8 +329,14 @@ impl Session {
             if self.chart.hidden.remove(&previous) {
                 self.chart.hidden.insert(next);
             }
-            if let Some(style) = self.panes.styles.remove(&PaneSettings::series_style_key(previous)) {
-                self.panes.styles.insert(PaneSettings::series_style_key(next), style);
+            if let Some(style) = self
+                .panes
+                .styles
+                .remove(&PaneSettings::series_style_key(previous))
+            {
+                self.panes
+                    .styles
+                    .insert(PaneSettings::series_style_key(next), style);
             }
             if let Some(pane) = self.panes.custom_series.remove(&previous) {
                 self.panes.custom_series.insert(next, pane);
@@ -333,13 +346,17 @@ impl Session {
             }
         }
         for rule in &mut self.rules {
-            if let Some(next) = RangeRule::target_id(&rule.target).and_then(|id| relocated_ids.get(&id)) {
+            if let Some(next) =
+                RangeRule::target_id(&rule.target).and_then(|id| relocated_ids.get(&id))
+            {
                 rule.target = RangeRule::series_target(*next);
             }
         }
         for annotation in &mut self.annotations {
             if let Annotation::Point { curve, .. } = annotation {
-                if let Some(next) = RangeRule::target_id(curve).and_then(|id| relocated_ids.get(&id)) {
+                if let Some(next) =
+                    RangeRule::target_id(curve).and_then(|id| relocated_ids.get(&id))
+                {
                     *curve = RangeRule::series_target(*next);
                 }
             }
@@ -603,23 +620,34 @@ impl Restore {
         loop {
             let ready = pending.iter().position(|entry| {
                 entry.as_ref().is_some_and(|(_, entry)| {
-                    entry.source.recipe_stage <= stage && entry.source.recipe.as_ref().is_some_and(|recipe| {
-                        recipe.parent_keys().iter().all(|key| {
-                            workspace.sources.iter().any(|source| source.stable_key() == *key)
+                    entry.source.recipe_stage <= stage
+                        && entry.source.recipe.as_ref().is_some_and(|recipe| {
+                            recipe.parent_keys().iter().all(|key| {
+                                workspace
+                                    .sources
+                                    .iter()
+                                    .any(|source| source.stable_key() == *key)
+                            })
                         })
-                    })
                 })
             });
             let Some(ready) = ready else { break };
-            let Some((position, entry)) = pending[ready].take() else { continue };
-            let Some(recipe) = entry.source.recipe.as_ref() else { continue };
+            let Some((position, entry)) = pending[ready].take() else {
+                continue;
+            };
+            let Some(recipe) = entry.source.recipe.as_ref() else {
+                continue;
+            };
             match workspace.regenerate(recipe) {
                 Ok(index) => {
                     self.restore_entry(workspace, index, &entry);
                     order.push((position, index));
                 }
                 Err(error) => {
-                    workspace.problems.push(format!("Could not regenerate “{}”: {error}", entry.source.name));
+                    workspace.problems.push(format!(
+                        "Could not regenerate “{}”: {error}",
+                        entry.source.name
+                    ));
                     self.missing(workspace, position, entry);
                 }
             }
@@ -631,12 +659,22 @@ impl Restore {
             if entry.source.recipe.is_some() {
                 format!("Could not regenerate “{}”: a parent source is missing or the source operation failed", entry.source.name)
             } else {
-                format!("Could not regenerate “{}”; see the processing errors", entry.source.name)
+                format!(
+                    "Could not regenerate “{}”; see the processing errors",
+                    entry.source.name
+                )
             }
         } else {
-            let sheet = if entry.source.frame_name.is_empty() { String::new() } else { format!(" (sheet “{}”)", entry.source.frame_name) };
-            format!("Could not restore “{}”{sheet} from {}; see the file loading errors",
-                entry.source.name, entry.source.path.display())
+            let sheet = if entry.source.frame_name.is_empty() {
+                String::new()
+            } else {
+                format!(" (sheet “{}”)", entry.source.frame_name)
+            };
+            format!(
+                "Could not restore “{}”{sheet} from {}; see the file loading errors",
+                entry.source.name,
+                entry.source.path.display()
+            )
         };
         workspace.problems.push(reason.clone());
         self.unresolved.push(UnresolvedSource {
@@ -1224,7 +1262,12 @@ mod tests {
         workspace.load(vec![gpus], false, Some("CSV file".into()));
         wait_for_load(&mut workspace);
         workspace.x_key = Some(clean_col("Time_[s]"));
-        let column = workspace.tables.tabs[0].data.columns().iter().position(|c| c.name == "name").unwrap();
+        let column = workspace.tables.tabs[0]
+            .data
+            .columns()
+            .iter()
+            .position(|c| c.name == "name")
+            .unwrap();
         workspace.split_source(0, column).unwrap();
         assert_eq!(workspace.sources.len(), 3, "{:?}", workspace.problems);
         workspace.selected = vec![clean_col("Power_[W]")];
@@ -1232,8 +1275,12 @@ mod tests {
         assert_eq!(workspace.sources.len(), 4, "{:?}", workspace.problems);
         workspace.data_changed();
         workspace.rebuild();
-        let merged_columns: Vec<String> =
-            workspace.tables.tabs[3].data.columns().iter().map(|c| c.name.clone()).collect();
+        let merged_columns: Vec<String> = workspace.tables.tabs[3]
+            .data
+            .columns()
+            .iter()
+            .map(|c| c.name.clone())
+            .collect();
         let before = defaults(&workspace);
 
         let mut target = Workspace::new(false);
@@ -1242,14 +1289,37 @@ mod tests {
         let view = restore.finish(&mut target).unwrap();
         assert!(restore.unresolved().is_empty(), "{:?}", target.problems);
         let names: Vec<&str> = target.sources.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["gpus.csv", "gpus.csv · RTX 4090", "gpus.csv · RTX 3060", "RTX 4090 + RTX 3060 (merged)"]);
+        assert_eq!(
+            names,
+            [
+                "gpus.csv",
+                "gpus.csv · RTX 4090",
+                "gpus.csv · RTX 3060",
+                "RTX 4090 + RTX 3060 (merged)"
+            ]
+        );
         let active: Vec<bool> = target.sources.iter().map(|s| s.active).collect();
         assert_eq!(active, [false, false, false, true]);
-        let restored_columns: Vec<String> =
-            target.tables.tabs[3].data.columns().iter().map(|c| c.name.clone()).collect();
+        let restored_columns: Vec<String> = target.tables.tabs[3]
+            .data
+            .columns()
+            .iter()
+            .map(|c| c.name.clone())
+            .collect();
         assert_eq!(restored_columns, merged_columns);
-        let after = Session::capture(&target, &view.chart, &view.chart_options, &view.figure_options, &view.stats, Some(&restore)).unwrap();
-        assert_eq!(serde_json::to_value(before).unwrap(), serde_json::to_value(after).unwrap());
+        let after = Session::capture(
+            &target,
+            &view.chart,
+            &view.chart_options,
+            &view.figure_options,
+            &view.stats,
+            Some(&restore),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(before).unwrap(),
+            serde_json::to_value(after).unwrap()
+        );
     }
 
     #[test]
@@ -1342,30 +1412,56 @@ mod tests {
             parent: workspace.sources[0].stable_key(),
         });
         session.sources.push(derived);
-        session.panes.styles.insert(PaneSettings::series_style_key(old), SeriesStyle {
-            color: Some([8, 30, 80]), width: Some(2.5), ..Default::default()
-        });
+        session.panes.styles.insert(
+            PaneSettings::series_style_key(old),
+            SeriesStyle {
+                color: Some([8, 30, 80]),
+                width: Some(2.5),
+                ..Default::default()
+            },
+        );
         session.panes.custom_series.insert(old, "Thermal".into());
         session.panes.removed.insert(old, "A".into());
         session.rules.push(RangeRule {
-            enabled: true, mode: Mode::Signals, target: RangeRule::series_target(old),
-            bounds: [None, None, Some(1.0), None], action: FilterMode::Keep,
+            enabled: true,
+            mode: Mode::Signals,
+            target: RangeRule::series_target(old),
+            bounds: [None, None, Some(1.0), None],
+            action: FilterMode::Keep,
         });
         session.annotations.push(Annotation::Point {
-            mode: Mode::Signals, curve: RangeRule::series_target(old), x: 1.0, y: 3.0,
-            label: "Peak".into(), color: [66, 101, 218],
+            mode: Mode::Signals,
+            curve: RangeRule::series_target(old),
+            x: 1.0,
+            y: 3.0,
+            label: "Peak".into(),
+            color: [66, 101, 218],
         });
         session.chart.hidden.insert(old);
         let replacement = dir.file("replacement.csv");
         session.relocate(&input, &replacement).unwrap();
         let new = crate::series::series_id(&session.sources[0].source, &key);
         assert_ne!(old, new);
-        assert!(!session.panes.styles.contains_key(&PaneSettings::series_style_key(old)));
-        assert_eq!(session.panes.styles[&PaneSettings::series_style_key(new)].width, Some(2.5));
-        assert_eq!(session.panes.custom_series.get(&new).map(String::as_str), Some("Thermal"));
-        assert_eq!(session.panes.removed.get(&new).map(String::as_str), Some("A"));
+        assert!(!session
+            .panes
+            .styles
+            .contains_key(&PaneSettings::series_style_key(old)));
+        assert_eq!(
+            session.panes.styles[&PaneSettings::series_style_key(new)].width,
+            Some(2.5)
+        );
+        assert_eq!(
+            session.panes.custom_series.get(&new).map(String::as_str),
+            Some("Thermal")
+        );
+        assert_eq!(
+            session.panes.removed.get(&new).map(String::as_str),
+            Some("A")
+        );
         assert_eq!(RangeRule::target_id(&session.rules[0].target), Some(new));
-        assert!(matches!(&session.annotations[0], Annotation::Point { curve, .. } if RangeRule::target_id(curve) == Some(new)));
+        assert!(
+            matches!(&session.annotations[0], Annotation::Point { curve, .. } if RangeRule::target_id(curve) == Some(new))
+        );
         assert!(session.chart.hidden.contains(&new));
         assert!(!session.chart.hidden.contains(&old));
         assert!(matches!(&session.sources[1].source.recipe,

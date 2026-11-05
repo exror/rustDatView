@@ -1,5 +1,9 @@
 //! The application-to-chart adapter. Screen and figure export both use this data.
-use std::{borrow::Cow, collections::BTreeMap, sync::{Arc, LazyLock}};
+use std::{
+    borrow::Cow,
+    collections::BTreeMap,
+    sync::{Arc, LazyLock},
+};
 
 use dv_chart::{
     AxisFormat, ChartConfig, ChartResponse, ChartState, ChartTheme, Dash, Draw, Mark, Pane, Scale,
@@ -191,7 +195,9 @@ pub(crate) fn show(
                                 .changed()
                             {
                                 workspace.panes.custom.insert(key.clone(), name);
-                                for series in workspace.series.iter().filter(|series| &series.key == key) {
+                                for series in
+                                    workspace.series.iter().filter(|series| &series.key == key)
+                                {
                                     workspace.panes.custom_series.remove(&series.id);
                                 }
                                 regroup = true;
@@ -246,7 +252,13 @@ pub(crate) fn show(
         .response
         .on_hover_text("Grid, legend, crosshair and axis options");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if super::widgets::icon_button(ui, super::icons::SLIDERS, "Show or hide inspector · Ctrl+I").clicked() {
+            if super::widgets::icon_button(
+                ui,
+                super::icons::SLIDERS,
+                "Show or hide inspector · Ctrl+I",
+            )
+            .clicked()
+            {
                 *inspector_visible = !*inspector_visible;
             }
             if let Some(range) = state.selection {
@@ -296,11 +308,14 @@ pub(crate) fn show(
     );
     if workspace.series.is_empty() {
         let tokens = theme::Tokens::for_dark(dark);
-        let text = workspace.chart_notice.as_deref().unwrap_or(if workspace.selected.is_empty() {
-            "Choose channels in the sidebar to plot them."
-        } else {
-            "The selected channels have no values to plot here."
-        });
+        let text = workspace
+            .chart_notice
+            .as_deref()
+            .unwrap_or(if workspace.selected.is_empty() {
+                "Choose channels in the sidebar to plot them."
+            } else {
+                "The selected channels have no values to plot here."
+            });
         ui.painter().text(
             response.response.rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -395,7 +410,10 @@ pub(crate) fn series_color(
         .or_else(|| workspace.panes.styles.get(&series.key))
         .and_then(|style| style.color)
         .or_else(|| {
-            specific.is_none().then(|| workspace.panes.colors.get(&series.key).copied()).flatten()
+            specific
+                .is_none()
+                .then(|| workspace.panes.colors.get(&series.key).copied())
+                .flatten()
         })
         .map(color)
         .unwrap_or(palette[series.color_slot % palette.len()])
@@ -464,7 +482,9 @@ pub(crate) fn with_chart<R>(
     for (group_index, (name, indices)) in groups.iter().enumerate() {
         let first = &workspace.series[indices[0]];
         let flags = workspace.mode == Mode::Signals
-            && indices.iter().all(|&index| workspace.series[index].family == "Flags");
+            && indices
+                .iter()
+                .all(|&index| workspace.series[index].family == "Flags");
         let unit = if indices
             .iter()
             .all(|&index| workspace.series[index].unit == first.unit)
@@ -652,7 +672,10 @@ pub(crate) fn with_chart<R>(
         // X axes; sharing one would squeeze all but one into a sliver.
         link_x: options.link_x
             && !(workspace.mode == Mode::Distribution
-                && workspace.series.iter().any(|s| s.family != workspace.series[0].family)),
+                && workspace
+                    .series
+                    .iter()
+                    .any(|s| s.family != workspace.series[0].family)),
         grid: options.grid,
         legend: options.legend,
         legend_values: options.legend_values,
@@ -687,7 +710,11 @@ pub(crate) fn with_chart<R>(
                         if indices.iter().any(|&index| {
                             let series = &workspace.series[index];
                             curve_id.map_or_else(
-                                || series.key == *curve || series.label == *curve || series.channel_label == *curve,
+                                || {
+                                    series.key == *curve
+                                        || series.label == *curve
+                                        || series.channel_label == *curve
+                                },
                                 |id| series.id == id,
                             )
                         }) {
@@ -767,24 +794,40 @@ pub(crate) fn x_axis_format(workspace: &Workspace) -> (AxisFormat, bool) {
         return (AxisFormat::Number, false);
     }
     let aligned_datetime = first.is_some_and(|series| {
-        workspace.sources.get(series.source).is_some_and(|source| source.align_start)
-            && workspace.tables.tabs.get(series.source).is_some_and(|table| {
-                workspace.x_key.as_ref().is_some_and(|key| {
-                    table.data.columns().iter().any(|column| {
-                        column.is_datetime() && dv_core::common::clean_col(&column.name) == *key
+        workspace
+            .sources
+            .get(series.source)
+            .is_some_and(|source| source.align_start)
+            && workspace
+                .tables
+                .tabs
+                .get(series.source)
+                .is_some_and(|table| {
+                    workspace.x_key.as_ref().is_some_and(|key| {
+                        table.data.columns().iter().any(|column| {
+                            column.is_datetime() && dv_core::common::clean_col(&column.name) == *key
+                        })
                     })
                 })
-            })
     });
     // The plotted source's own X column decides: the channel catalog merges
     // every loaded source, including hidden ones with other units.
     let seconds = workspace.x_key.as_ref().is_some_and(|key| {
-        let own = first.and_then(|series| workspace.tables.tabs.get(series.source)).and_then(|table| {
-            table.data.columns().iter().find(|column| dv_core::common::clean_col(&column.name) == *key)
-        });
+        let own = first
+            .and_then(|series| workspace.tables.tabs.get(series.source))
+            .and_then(|table| {
+                table
+                    .data
+                    .columns()
+                    .iter()
+                    .find(|column| dv_core::common::clean_col(&column.name) == *key)
+            });
         match own {
             Some(column) => dv_core::units::split_name_unit(&column.name).1 == "s",
-            None => workspace.channels.iter().any(|channel| &channel.key == key && channel.unit == "s"),
+            None => workspace
+                .channels
+                .iter()
+                .any(|channel| &channel.key == key && channel.unit == "s"),
         }
     });
     if aligned_datetime || seconds {
@@ -800,8 +843,15 @@ pub(crate) fn x_readout(workspace: &Workspace, x: f64, precision: usize) -> Stri
         AxisFormat::DateTime => dv_chart::format::format_time(x, 0.001),
         AxisFormat::Duration => dv_chart::format::format_elapsed(x, precision.max(5)),
         _ => {
-            let unit = workspace.x_key.as_ref()
-                .and_then(|key| workspace.channels.iter().find(|channel| &channel.key == key))
+            let unit = workspace
+                .x_key
+                .as_ref()
+                .and_then(|key| {
+                    workspace
+                        .channels
+                        .iter()
+                        .find(|channel| &channel.key == key)
+                })
                 .map_or("", |channel| channel.unit.as_str());
             dv_chart::format::format_value(x, unit, precision)
         }

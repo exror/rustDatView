@@ -51,8 +51,10 @@ impl InfoView {
                         .map(|file| {
                             let format = file.format_name();
                             let info = file.info().replace("\n: ", "\n");
-                            let table_line = |line: &str| line.ends_with(" columns") && line.contains(" rows, ");
-                            let single_table = info.lines().filter(|line| table_line(line)).count() <= 1;
+                            let table_line =
+                                |line: &str| line.ends_with(" columns") && line.contains(" rows, ");
+                            let single_table =
+                                info.lines().filter(|line| table_line(line)).count() <= 1;
                             info.lines()
                                 .map(str::trim)
                                 .filter(|line| !line.is_empty() && *line != format)

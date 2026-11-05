@@ -406,7 +406,9 @@ fn label_ticks(
                     // fractions of a second (0.0002 s). One prefix serves the
                     // whole axis so labels stay comparable.
                     AxisFormat::Duration
-                        if duration_style == DurationStyle::Seconds && duration_max < 1.0 && !logarithmic =>
+                        if duration_style == DurationStyle::Seconds
+                            && duration_max < 1.0
+                            && !logarithmic =>
                     {
                         let (scale, unit) = if duration_max >= 1e-3 {
                             (1e-3, "ms")
@@ -415,9 +417,14 @@ fn label_ticks(
                         } else {
                             (1e-9, "ns")
                         };
-                        let decimals = (-(label_step / scale).log10()).ceil().clamp(0.0, 9.0) as usize;
+                        let decimals =
+                            (-(label_step / scale).log10()).ceil().clamp(0.0, 9.0) as usize;
                         let scaled = value / scale;
-                        let scaled = if scaled.abs() < label_step / scale * 1e-6 { 0.0 } else { scaled };
+                        let scaled = if scaled.abs() < label_step / scale * 1e-6 {
+                            0.0
+                        } else {
+                            scaled
+                        };
                         format!("{scaled:.decimals$} {unit}")
                     }
                     AxisFormat::Duration => {

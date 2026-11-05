@@ -43,7 +43,8 @@ impl Inspector {
         ui.horizontal(|ui| {
             widgets::section_label(ui, "Inspector");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                close = widgets::icon_button(ui, icons::CLOSE, "Close inspector · Ctrl+I").clicked();
+                close =
+                    widgets::icon_button(ui, icons::CLOSE, "Close inspector · Ctrl+I").clicked();
             });
         });
         ui.add_space(6.0);
@@ -53,7 +54,11 @@ impl Inspector {
             &[
                 (Tab::Series, "Series", "Style and arrange plotted series"),
                 (Tab::Marks, "Marks", "Annotations and reference lines"),
-                (Tab::Filters, "Filters", "Hide samples outside chosen ranges without changing the data"),
+                (
+                    Tab::Filters,
+                    "Filters",
+                    "Hide samples outside chosen ranges without changing the data",
+                ),
             ],
         ) {
             self.tab = tab;
@@ -87,7 +92,9 @@ impl Inspector {
         tokens: theme::Tokens,
     ) -> bool {
         if workspace.series.is_empty() && workspace.panes.removed.is_empty() {
-            ui.label(RichText::new("Choose channels to add them to the chart.").color(tokens.text_muted));
+            ui.label(
+                RichText::new("Choose channels to add them to the chart.").color(tokens.text_muted),
+            );
             return false;
         }
         let palette = theme::palette_for(theme::is_dark(ui.ctx()), settings.palette);
@@ -107,28 +114,62 @@ impl Inspector {
             let mut changed = false;
             let mut reset = false;
             let visible = !chart.hidden.contains(&series.id);
-            let source = workspace.sources.get(series.source).map_or("", |source| source.name.as_str());
+            let source = workspace
+                .sources
+                .get(series.source)
+                .map_or("", |source| source.name.as_str());
             ui.push_id(("inspector-series", series.id), |ui| {
                 card(ui, tokens, |ui| {
                     ui.horizontal(|ui| {
                         if widgets::icon_button(
                             ui,
-                            if visible { icons::VISIBLE } else { icons::HIDDEN },
-                            if visible { "Hide series" } else { "Show series" },
-                        ).clicked() {
-                            if visible { chart.hidden.insert(series.id); } else { chart.hidden.remove(&series.id); }
+                            if visible {
+                                icons::VISIBLE
+                            } else {
+                                icons::HIDDEN
+                            },
+                            if visible {
+                                "Hide series"
+                            } else {
+                                "Show series"
+                            },
+                        )
+                        .clicked()
+                        {
+                            if visible {
+                                chart.hidden.insert(series.id);
+                            } else {
+                                chart.hidden.remove(&series.id);
+                            }
                         }
-                        let (dot, _) = ui.allocate_exact_size(egui::vec2(12.0, 24.0), egui::Sense::hover());
+                        let (dot, _) =
+                            ui.allocate_exact_size(egui::vec2(12.0, 24.0), egui::Sense::hover());
                         ui.painter().circle_filled(dot.center(), 5.0, current_color);
                         // Trash pinned right; the label takes what is left and truncates.
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if widgets::icon_button(ui, icons::TRASH, "Remove this series from the chart").clicked() {
+                            if widgets::icon_button(
+                                ui,
+                                icons::TRASH,
+                                "Remove this series from the chart",
+                            )
+                            .clicked()
+                            {
                                 remove = Some((series.id, series.label.clone()));
                             }
-                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                ui.add(egui::Label::new(RichText::new(&series.label).strong().color(tokens.text)).truncate())
+                            ui.with_layout(
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(&series.label)
+                                                .strong()
+                                                .color(tokens.text),
+                                        )
+                                        .truncate(),
+                                    )
                                     .on_hover_text(&series.label);
-                            });
+                                },
+                            );
                         });
                     });
                     let detail = match (series.unit.is_empty(), source.is_empty()) {
@@ -138,8 +179,15 @@ impl Inspector {
                         (true, true) => String::new(),
                     };
                     if !detail.is_empty() {
-                        ui.add(egui::Label::new(RichText::new(&detail).size(11.5).color(tokens.text_secondary)).truncate())
-                            .on_hover_text(&detail);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&detail)
+                                    .size(11.5)
+                                    .color(tokens.text_secondary),
+                            )
+                            .truncate(),
+                        )
+                        .on_hover_text(&detail);
                     }
                     egui::CollapsingHeader::new("Style & pane")
                         .default_open(index == 0)
@@ -147,11 +195,12 @@ impl Inspector {
                             // Label column plus grid spacing; controls take the rest.
                             let control = (ui.available_width() - 72.0).max(80.0);
                             let mut dash = style.dash.unwrap_or(series.dash);
-                            let default_draw = if workspace.mode == Mode::Signals && series.family == "Flags" {
-                                LineDraw::Steps
-                            } else {
-                                LineDraw::Lines
-                            };
+                            let default_draw =
+                                if workspace.mode == Mode::Signals && series.family == "Flags" {
+                                    LineDraw::Steps
+                                } else {
+                                    LineDraw::Lines
+                                };
                             let mut draw = style.draw.unwrap_or(default_draw);
                             widgets::property_grid(ui, "style", |ui| {
                                 ui.label("Color");
@@ -162,7 +211,15 @@ impl Inspector {
                                 ui.end_row();
                                 ui.label("Width");
                                 let mut width = style.width.unwrap_or(settings.line_width);
-                                if ui.add(egui::DragValue::new(&mut width).range(0.5..=6.0).speed(0.05).suffix(" px")).changed() {
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut width)
+                                            .range(0.5..=6.0)
+                                            .speed(0.05)
+                                            .suffix(" px"),
+                                    )
+                                    .changed()
+                                {
                                     style.width = Some(width);
                                     changed = true;
                                 }
@@ -172,8 +229,15 @@ impl Inspector {
                                     .width(control)
                                     .selected_text(dash_label(dash))
                                     .show_ui(ui, |ui| {
-                                        for (value, label) in [(0, "Solid"), (1, "Dashed"), (2, "Dotted"), (3, "Dash-dot")] {
-                                            changed |= ui.selectable_value(&mut dash, value, label).changed();
+                                        for (value, label) in [
+                                            (0, "Solid"),
+                                            (1, "Dashed"),
+                                            (2, "Dotted"),
+                                            (3, "Dash-dot"),
+                                        ] {
+                                            changed |= ui
+                                                .selectable_value(&mut dash, value, label)
+                                                .changed();
                                         }
                                     });
                                 ui.end_row();
@@ -188,7 +252,9 @@ impl Inspector {
                                             (LineDraw::LinesPoints, "Lines + points"),
                                             (LineDraw::Steps, "Steps"),
                                         ] {
-                                            changed |= ui.selectable_value(&mut draw, value, label).changed();
+                                            changed |= ui
+                                                .selectable_value(&mut draw, value, label)
+                                                .changed();
                                         }
                                     });
                                 ui.end_row();
@@ -198,20 +264,37 @@ impl Inspector {
                                     .selected_text(&series.pane)
                                     .show_ui(ui, |ui| {
                                         for name in &names {
-                                            if ui.selectable_label(series.pane == *name, *name).clicked() && series.pane != *name {
+                                            if ui
+                                                .selectable_label(series.pane == *name, *name)
+                                                .clicked()
+                                                && series.pane != *name
+                                            {
                                                 move_to = Some((series.id, (*name).to_owned()));
                                             }
                                         }
                                     });
                                 ui.end_row();
                             });
-                            if dash != style.dash.unwrap_or(series.dash) { style.dash = Some(dash); }
-                            if draw != style.draw.unwrap_or(default_draw) { style.draw = Some(draw); }
+                            if dash != style.dash.unwrap_or(series.dash) {
+                                style.dash = Some(dash);
+                            }
+                            if draw != style.draw.unwrap_or(default_draw) {
+                                style.draw = Some(draw);
+                            }
                             ui.horizontal(|ui| {
                                 let width = (ui.available_width() - 70.0).max(60.0);
-                                let edit = ui.add(egui::TextEdit::singleline(&mut self.new_pane).hint_text("New pane name").desired_width(width));
-                                let submit = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                                if ui.add_enabled(!self.new_pane.trim().is_empty(), egui::Button::new("Move"))
+                                let edit = ui.add(
+                                    egui::TextEdit::singleline(&mut self.new_pane)
+                                        .hint_text("New pane name")
+                                        .desired_width(width),
+                                );
+                                let submit = edit.lost_focus()
+                                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                if ui
+                                    .add_enabled(
+                                        !self.new_pane.trim().is_empty(),
+                                        egui::Button::new("Move"),
+                                    )
                                     .on_hover_text("Move this series to a new pane")
                                     .clicked()
                                     || (submit && !self.new_pane.trim().is_empty())
@@ -220,16 +303,24 @@ impl Inspector {
                                     self.new_pane.clear();
                                 }
                             });
-                            if ui.button("Reset style").clicked() { reset = true; }
+                            if ui.button("Reset style").clicked() {
+                                reset = true;
+                            }
                         });
                 });
             });
             if reset {
                 // An explicit default also overrides legacy channel-wide styles.
-                workspace.panes.styles.insert(PaneSettings::series_style_key(series.id), SeriesStyle::default());
+                workspace.panes.styles.insert(
+                    PaneSettings::series_style_key(series.id),
+                    SeriesStyle::default(),
+                );
                 rebuild = true;
             } else if changed {
-                workspace.panes.styles.insert(PaneSettings::series_style_key(series.id), style);
+                workspace
+                    .panes
+                    .styles
+                    .insert(PaneSettings::series_style_key(series.id), style);
                 rebuild = true;
             }
             ui.add_space(6.0);
@@ -250,8 +341,14 @@ impl Inspector {
             for (&id, label) in &workspace.panes.removed {
                 ui.horizontal(|ui| {
                     let width = (ui.available_width() - 70.0).max(40.0);
-                    ui.add_sized([width, 24.0], egui::Label::new(label).halign(egui::Align::Min).truncate()).on_hover_text(label);
-                    if ui.small_button("Restore").clicked() { restore = Some(id); }
+                    ui.add_sized(
+                        [width, 24.0],
+                        egui::Label::new(label).halign(egui::Align::Min).truncate(),
+                    )
+                    .on_hover_text(label);
+                    if ui.small_button("Restore").clicked() {
+                        restore = Some(id);
+                    }
                 });
             }
             if let Some(id) = restore {
@@ -269,7 +366,10 @@ pub(crate) fn move_series(workspace: &mut Workspace, id: u64, name: String) {
         workspace.panes.custom.clear();
         workspace.panes.custom_series.clear();
         for series in &workspace.series {
-            workspace.panes.custom_series.insert(series.id, series.pane.clone());
+            workspace
+                .panes
+                .custom_series
+                .insert(series.id, series.pane.clone());
         }
         workspace.panes.grouping = PaneGrouping::Custom;
     }
@@ -295,13 +395,20 @@ fn card(ui: &mut egui::Ui, tokens: theme::Tokens, contents: impl FnOnce(&mut egu
 fn pane_names(series: &[crate::series::SeriesData]) -> Vec<&str> {
     let mut names = Vec::new();
     for item in series {
-        if !names.contains(&item.pane.as_str()) { names.push(item.pane.as_str()); }
+        if !names.contains(&item.pane.as_str()) {
+            names.push(item.pane.as_str());
+        }
     }
     names
 }
 
 fn dash_label(dash: usize) -> &'static str {
-    match dash % 4 { 0 => "Solid", 1 => "Dashed", 2 => "Dotted", _ => "Dash-dot" }
+    match dash % 4 {
+        0 => "Solid",
+        1 => "Dashed",
+        2 => "Dotted",
+        _ => "Dash-dot",
+    }
 }
 fn draw_label(draw: LineDraw) -> &'static str {
     match draw {
@@ -321,42 +428,70 @@ fn marks(
     tokens: theme::Tokens,
 ) {
     let color = MARK_COLOR;
-    let selection = chart.selection.filter(|[a, b]| a.is_finite() && b.is_finite() && a != b);
-    let event_x = selection.map(|[a, b]| a.min(b)).or(cursor).filter(|x| x.is_finite());
+    let selection = chart
+        .selection
+        .filter(|[a, b]| a.is_finite() && b.is_finite() && a != b);
+    let event_x = selection
+        .map(|[a, b]| a.min(b))
+        .or(cursor)
+        .filter(|x| x.is_finite());
     ui.horizontal_wrapped(|ui| {
-        if ui.add_enabled(selection.is_some(), egui::Button::new("Region"))
+        if ui
+            .add_enabled(selection.is_some(), egui::Button::new("Region"))
             .on_hover_text("Mark the selected range")
             .on_disabled_hover_text("Select a range on the chart first")
             .clicked()
         {
             if let Some([a, b]) = selection {
-                if let Some(region) = Annotation::region(workspace.mode, workspace.x_key.clone().unwrap_or_default(), a, b, "Selection".into(), color) {
+                if let Some(region) = Annotation::region(
+                    workspace.mode,
+                    workspace.x_key.clone().unwrap_or_default(),
+                    a,
+                    b,
+                    "Selection".into(),
+                    color,
+                ) {
                     workspace.annotations.push(region);
                 }
             }
         }
-        if ui.add_enabled(event_x.is_some(), egui::Button::new("Event"))
+        if ui
+            .add_enabled(event_x.is_some(), egui::Button::new("Event"))
             .on_hover_text("Vertical marker at the selection start or the last cursor position")
             .on_disabled_hover_text("Point at the chart or select a range first")
             .clicked()
         {
             if let Some(x) = event_x {
                 workspace.annotations.push(Annotation::VLine {
-                    mode: workspace.mode, x_axis: workspace.x_key.clone().unwrap_or_default(), x,
-                    label: "Event".into(), color,
+                    mode: workspace.mode,
+                    x_axis: workspace.x_key.clone().unwrap_or_default(),
+                    x,
+                    label: "Event".into(),
+                    color,
                 });
             }
         }
-        if ui.add_enabled(!workspace.series.is_empty(), egui::Button::new("Reference line"))
+        if ui
+            .add_enabled(
+                !workspace.series.is_empty(),
+                egui::Button::new("Reference line"),
+            )
             .on_hover_text("Horizontal line at the mean of the first series; edit the value below")
             .clicked()
         {
             if let Some(first) = workspace.series.first() {
-                let (sum, count) = first.y.iter().filter(|v| v.is_finite()).fold((0.0, 0_usize), |(s, n), v| (s + v, n + 1));
+                let (sum, count) = first
+                    .y
+                    .iter()
+                    .filter(|v| v.is_finite())
+                    .fold((0.0, 0_usize), |(s, n), v| (s + v, n + 1));
                 let y = if count > 0 { sum / count as f64 } else { 0.0 };
                 workspace.annotations.push(Annotation::HLine {
-                    mode: workspace.mode, pane: first.pane.clone(), y,
-                    label: "Reference".into(), color,
+                    mode: workspace.mode,
+                    pane: first.pane.clone(),
+                    y,
+                    label: "Reference".into(),
+                    color,
                 });
             }
         }
@@ -368,7 +503,9 @@ fn marks(
     let mut zoom = None;
     let mut any = false;
     for (index, mark) in workspace.annotations.iter_mut().enumerate() {
-        if mark.mode() != workspace.mode { continue; }
+        if mark.mode() != workspace.mode {
+            continue;
+        }
         any = true;
         ui.push_id(("inspector-mark", index), |ui| {
             card(ui, tokens, |ui| {
@@ -381,18 +518,30 @@ fn marks(
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(kind).strong().color(tokens.text));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::icon_button(ui, icons::TRASH, "Delete mark").clicked() { delete = Some(index); }
-                        if widgets::icon_button(ui, icons::ZOOM_IN, "Zoom to mark").clicked() { zoom = Some(index); }
+                        if widgets::icon_button(ui, icons::TRASH, "Delete mark").clicked() {
+                            delete = Some(index);
+                        }
+                        if widgets::icon_button(ui, icons::ZOOM_IN, "Zoom to mark").clicked() {
+                            zoom = Some(index);
+                        }
                         ui.color_edit_button_srgb(color).on_hover_text("Mark color");
                     });
                 });
-                ui.add(egui::TextEdit::singleline(label).hint_text("Label").desired_width(ui.available_width() - 12.0));
+                ui.add(
+                    egui::TextEdit::singleline(label)
+                        .hint_text("Label")
+                        .desired_width(ui.available_width() - 12.0),
+                );
                 widgets::property_grid(ui, "mark", |ui| match &mut *mark {
                     Annotation::Point { curve, x, y, .. } => {
                         let series = point_series(&workspace.series, curve);
                         ui.label("Series");
                         let channel = series.map_or(curve.as_str(), |s| s.label.as_str());
-                        ui.add(egui::Label::new(RichText::new(channel).color(tokens.text_secondary)).truncate()).on_hover_text(channel);
+                        ui.add(
+                            egui::Label::new(RichText::new(channel).color(tokens.text_secondary))
+                                .truncate(),
+                        )
+                        .on_hover_text(channel);
                         ui.end_row();
                         x_row(ui, "X", x, x_input);
                         value_row(ui, "Y", y, series.map_or("", |s| s.unit.as_str()));
@@ -408,10 +557,16 @@ fn marks(
                             .width((ui.available_width() - 24.0).max(70.0))
                             .selected_text(pane.as_str())
                             .show_ui(ui, |ui| {
-                                for name in &names { ui.selectable_value(pane, (*name).to_owned(), *name); }
+                                for name in &names {
+                                    ui.selectable_value(pane, (*name).to_owned(), *name);
+                                }
                             });
                         ui.end_row();
-                        let unit = workspace.series.iter().find(|s| s.pane == *pane).map_or("", |s| s.unit.as_str());
+                        let unit = workspace
+                            .series
+                            .iter()
+                            .find(|s| s.pane == *pane)
+                            .map_or("", |s| s.unit.as_str());
                         value_row(ui, "Value", y, unit);
                     }
                 });
@@ -420,14 +575,19 @@ fn marks(
         ui.add_space(6.0);
     }
     if !any {
-        ui.label(RichText::new("No marks in this mode. Add one above or right-click the chart.").color(tokens.text_muted));
+        ui.label(
+            RichText::new("No marks in this mode. Add one above or right-click the chart.")
+                .color(tokens.text_muted),
+        );
     }
     if let Some(index) = zoom {
         if let Some(mark) = workspace.annotations.get(index) {
             zoom_to_mark(workspace, chart, options, mark);
         }
     }
-    if let Some(index) = delete { workspace.annotations.remove(index); }
+    if let Some(index) = delete {
+        workspace.annotations.remove(index);
+    }
 }
 
 /// How mark positions along X are written and typed: the way the X axis shows them.
@@ -458,14 +618,22 @@ fn x_row(ui: &mut egui::Ui, name: &str, value: &mut f64, input: XInput) {
 fn x_drag(value: &mut f64, input: XInput) -> egui::DragValue<'_> {
     // Typing a time of day keeps the date of the current position.
     let day = (*value / 86_400.0).floor() * 86_400.0;
-    let drag = egui::DragValue::new(value).range(-f64::MAX..=f64::MAX).speed(0.1);
+    let drag = egui::DragValue::new(value)
+        .range(-f64::MAX..=f64::MAX)
+        .speed(0.1);
     match input {
         XInput::Number => drag,
         XInput::Clock => drag
             .custom_formatter(|v, _| format::format_time(v, 0.1))
             .custom_parser(move |text| format::parse_seconds(text).map(|seconds| day + seconds)),
         XInput::Duration => drag
-            .custom_formatter(|v, _| if v.abs() < 60.0 { format::format_value(v, "s", 6) } else { format::format_duration(v, 0.001) })
+            .custom_formatter(|v, _| {
+                if v.abs() < 60.0 {
+                    format::format_value(v, "s", 6)
+                } else {
+                    format::format_duration(v, 0.001)
+                }
+            })
             .custom_parser(format::parse_seconds),
     }
 }
@@ -473,7 +641,9 @@ fn x_drag(value: &mut f64, input: XInput) -> egui::DragValue<'_> {
 fn value_row(ui: &mut egui::Ui, name: &str, value: &mut f64, unit: &str) {
     ui.label(name);
     let speed = (value.abs() * 0.002).max(0.01);
-    let mut drag = egui::DragValue::new(value).range(-f64::MAX..=f64::MAX).speed(speed);
+    let mut drag = egui::DragValue::new(value)
+        .range(-f64::MAX..=f64::MAX)
+        .speed(speed);
     if !unit.is_empty() {
         drag = drag.suffix(format!(" {unit}"));
     }
@@ -481,41 +651,83 @@ fn value_row(ui: &mut egui::Ui, name: &str, value: &mut f64, unit: &str) {
     ui.end_row();
 }
 
-fn point_series<'a>(series: &'a [crate::series::SeriesData], curve: &str) -> Option<&'a crate::series::SeriesData> {
+fn point_series<'a>(
+    series: &'a [crate::series::SeriesData],
+    curve: &str,
+) -> Option<&'a crate::series::SeriesData> {
     let id = RangeRule::target_id(curve);
-    series.iter().find(|s| id.map_or_else(|| s.key == curve || s.label == curve || s.channel_label == curve, |id| s.id == id))
+    series.iter().find(|s| {
+        id.map_or_else(
+            || s.key == curve || s.label == curve || s.channel_label == curve,
+            |id| s.id == id,
+        )
+    })
 }
 
-fn zoom_to_mark(workspace: &Workspace, chart: &mut ChartState, options: &chart_view::ChartOptions, mark: &Annotation) {
+fn zoom_to_mark(
+    workspace: &Workspace,
+    chart: &mut ChartState,
+    options: &chart_view::ChartOptions,
+    mark: &Annotation,
+) {
     let (x, y) = match mark {
-        Annotation::Region { min, max, .. } if min.is_finite() && max.is_finite() && min != max => (Some([min.min(*max), min.max(*max)]), None),
+        Annotation::Region { min, max, .. } if min.is_finite() && max.is_finite() && min != max => {
+            (Some([min.min(*max), min.max(*max)]), None)
+        }
         Annotation::Point { curve, x, y, .. } => {
             let pane = point_series(&workspace.series, curve).map(|s| s.pane.as_str());
-            (x.is_finite().then(|| centered_x(workspace, chart, *x)), pane.map(|pane| (pane, *y)))
+            (
+                x.is_finite().then(|| centered_x(workspace, chart, *x)),
+                pane.map(|pane| (pane, *y)),
+            )
         }
-        Annotation::VLine { x, .. } => (x.is_finite().then(|| centered_x(workspace, chart, *x)), None),
+        Annotation::VLine { x, .. } => (
+            x.is_finite().then(|| centered_x(workspace, chart, *x)),
+            None,
+        ),
         Annotation::HLine { pane, y, .. } => (None, Some((pane.as_str(), *y))),
         _ => (None, None),
     };
     if let Some(range) = x {
-        if options.link_x { chart.x_view = Some(range); } else {
-            for series in &workspace.series { chart.pane_x_views.insert(chart_view::pane_id(&series.pane), range); }
+        if options.link_x {
+            chart.x_view = Some(range);
+        } else {
+            for series in &workspace.series {
+                chart
+                    .pane_x_views
+                    .insert(chart_view::pane_id(&series.pane), range);
+            }
         }
     }
     if let Some((pane, value)) = y.filter(|(_, y)| y.is_finite()) {
         let id = chart_view::pane_id(pane);
-        let log = options.pane_log_y.get(&id).copied().unwrap_or(options.log_y);
+        let log = options
+            .pane_log_y
+            .get(&id)
+            .copied()
+            .unwrap_or(options.log_y);
         if log {
-            if value > 0.0 { chart.y_views.insert(id, [value / 2.0, value * 2.0]); }
+            if value > 0.0 {
+                chart.y_views.insert(id, [value / 2.0, value * 2.0]);
+            }
         } else {
-            let span = chart.y_views.get(&id).map(|r| (r[1] - r[0]).abs()).filter(|v| v.is_finite() && *v > 0.0).or_else(|| {
-                let mut min = f64::INFINITY;
-                let mut max = f64::NEG_INFINITY;
-                for series in workspace.series.iter().filter(|s| s.pane == pane) {
-                    for &y in series.y.iter().filter(|y| y.is_finite()) { min = min.min(y); max = max.max(y); }
-                }
-                (max > min).then_some(max - min)
-            }).unwrap_or_else(|| value.abs().max(1.0));
+            let span = chart
+                .y_views
+                .get(&id)
+                .map(|r| (r[1] - r[0]).abs())
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .or_else(|| {
+                    let mut min = f64::INFINITY;
+                    let mut max = f64::NEG_INFINITY;
+                    for series in workspace.series.iter().filter(|s| s.pane == pane) {
+                        for &y in series.y.iter().filter(|y| y.is_finite()) {
+                            min = min.min(y);
+                            max = max.max(y);
+                        }
+                    }
+                    (max > min).then_some(max - min)
+                })
+                .unwrap_or_else(|| value.abs().max(1.0));
             let half = (span * 0.2).max(value.abs() * f64::EPSILON * 4.0).max(1e-9);
             chart.y_views.insert(id, [value - half, value + half]);
         }
@@ -523,13 +735,21 @@ fn zoom_to_mark(workspace: &Workspace, chart: &mut ChartState, options: &chart_v
 }
 
 fn centered_x(workspace: &Workspace, chart: &ChartState, x: f64) -> [f64; 2] {
-    let span = chart.x_view.map(|r| (r[1] - r[0]).abs()).filter(|v| v.is_finite() && *v > 0.0).or_else(|| {
-        let series = workspace.series.first()?;
-        let mut min = f64::INFINITY;
-        let mut max = f64::NEG_INFINITY;
-        for &value in series.x.iter().filter(|v| v.is_finite()) { min = min.min(value); max = max.max(value); }
-        (max > min).then_some(max - min)
-    }).unwrap_or(1.0);
+    let span = chart
+        .x_view
+        .map(|r| (r[1] - r[0]).abs())
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .or_else(|| {
+            let series = workspace.series.first()?;
+            let mut min = f64::INFINITY;
+            let mut max = f64::NEG_INFINITY;
+            for &value in series.x.iter().filter(|v| v.is_finite()) {
+                min = min.min(value);
+                max = max.max(value);
+            }
+            (max > min).then_some(max - min)
+        })
+        .unwrap_or(1.0);
     let half = (span * 0.1).max(x.abs() * f64::EPSILON * 4.0).max(1e-9);
     [x - half, x + half]
 }
@@ -539,7 +759,13 @@ fn rules(ui: &mut egui::Ui, workspace: &mut Workspace, tokens: theme::Tokens) ->
     ui.add_space(8.0);
     let mut rebuild = false;
     if ui.button("Add filter").clicked() {
-        workspace.rules.push(RangeRule { enabled: true, mode: workspace.mode, target: String::new(), bounds: [None; 4], action: FilterMode::Keep });
+        workspace.rules.push(RangeRule {
+            enabled: true,
+            mode: workspace.mode,
+            target: String::new(),
+            bounds: [None; 4],
+            action: FilterMode::Keep,
+        });
         rebuild = true;
     }
     ui.add_space(8.0);
@@ -547,28 +773,52 @@ fn rules(ui: &mut egui::Ui, workspace: &mut Workspace, tokens: theme::Tokens) ->
     let mut delete = None;
     let mut any = false;
     for (index, rule) in workspace.rules.iter_mut().enumerate() {
-        if rule.mode != workspace.mode { continue; }
+        if rule.mode != workspace.mode {
+            continue;
+        }
         any = true;
         ui.push_id(("inspector-rule", index), |ui| {
             card(ui, tokens, |ui| {
                 ui.horizontal(|ui| {
                     rebuild |= ui.checkbox(&mut rule.enabled, "Enabled").changed();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::icon_button(ui, icons::TRASH, "Delete filter").clicked() { delete = Some(index); }
+                        if widgets::icon_button(ui, icons::TRASH, "Delete filter").clicked() {
+                            delete = Some(index);
+                        }
                     });
                 });
                 ui.horizontal(|ui| {
                     ui.label("Action");
                     egui::ComboBox::from_id_salt("filter-action")
-                        .selected_text(match rule.action { FilterMode::Keep => "Keep inside", FilterMode::Exclude => "Exclude inside" })
+                        .selected_text(match rule.action {
+                            FilterMode::Keep => "Keep inside",
+                            FilterMode::Exclude => "Exclude inside",
+                        })
                         .show_ui(ui, |ui| {
-                            rebuild |= ui.selectable_value(&mut rule.action, FilterMode::Keep, "Keep inside").changed();
-                            rebuild |= ui.selectable_value(&mut rule.action, FilterMode::Exclude, "Exclude inside").changed();
+                            rebuild |= ui
+                                .selectable_value(&mut rule.action, FilterMode::Keep, "Keep inside")
+                                .changed();
+                            rebuild |= ui
+                                .selectable_value(
+                                    &mut rule.action,
+                                    FilterMode::Exclude,
+                                    "Exclude inside",
+                                )
+                                .changed();
                         });
                 });
                 let target_id = RangeRule::target_id(&rule.target);
-                let target_label = if rule.target.is_empty() { "All plotted series" } else {
-                    workspace.series.iter().find(|s| Some(s.id) == target_id || s.key == rule.target || s.label == rule.target)
+                let target_label = if rule.target.is_empty() {
+                    "All plotted series"
+                } else {
+                    workspace
+                        .series
+                        .iter()
+                        .find(|s| {
+                            Some(s.id) == target_id
+                                || s.key == rule.target
+                                || s.label == rule.target
+                        })
                         .map_or("Unavailable series", |s| s.label.as_str())
                 };
                 ui.label(RichText::new("Apply to").color(tokens.text_secondary));
@@ -576,30 +826,55 @@ fn rules(ui: &mut egui::Ui, workspace: &mut Workspace, tokens: theme::Tokens) ->
                     .width((ui.available_width() - 24.0).max(70.0))
                     .selected_text(target_label)
                     .show_ui(ui, |ui| {
-                        if ui.selectable_label(rule.target.is_empty(), "All plotted series").clicked() && !rule.target.is_empty() {
-                            rule.target.clear(); rebuild = true;
+                        if ui
+                            .selectable_label(rule.target.is_empty(), "All plotted series")
+                            .clicked()
+                            && !rule.target.is_empty()
+                        {
+                            rule.target.clear();
+                            rebuild = true;
                         }
                         for series in &workspace.series {
-                            if ui.selectable_label(target_id == Some(series.id), &series.label).clicked() && target_id != Some(series.id) {
-                                rule.target = RangeRule::series_target(series.id); rebuild = true;
+                            if ui
+                                .selectable_label(target_id == Some(series.id), &series.label)
+                                .clicked()
+                                && target_id != Some(series.id)
+                            {
+                                rule.target = RangeRule::series_target(series.id);
+                                rebuild = true;
                             }
                         }
                     });
                 ui.add_space(4.0);
-                ui.label(RichText::new("Inclusive bounds").size(11.5).color(tokens.text_secondary));
+                ui.label(
+                    RichText::new("Inclusive bounds")
+                        .size(11.5)
+                        .color(tokens.text_secondary),
+                );
                 // A newly enabled bound starts at the edge of the data it filters.
                 let target = rule.target.clone();
                 let series = &workspace.series;
                 let extent = |slot: usize| {
-                    let (lo, hi) = series.iter()
+                    let (lo, hi) = series
+                        .iter()
                         .filter(|s| target.is_empty() || Some(s.id) == target_id || s.key == target)
                         .flat_map(|s| if slot < 2 { s.x.iter() } else { s.y.iter() })
                         .filter(|v| v.is_finite())
-                        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
+                        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+                            (lo.min(*v), hi.max(*v))
+                        });
                     let value = if slot % 2 == 0 { lo } else { hi };
-                    if value.is_finite() { value } else { 0.0 }
+                    if value.is_finite() {
+                        value
+                    } else {
+                        0.0
+                    }
                 };
-                for (slot, (label, bound)) in ["X minimum", "X maximum", "Y minimum", "Y maximum"].into_iter().zip(&mut rule.bounds).enumerate() {
+                for (slot, (label, bound)) in ["X minimum", "X maximum", "Y minimum", "Y maximum"]
+                    .into_iter()
+                    .zip(&mut rule.bounds)
+                    .enumerate()
+                {
                     let input = if slot < 2 { x_input } else { XInput::Number };
                     rebuild |= bound_row(ui, label, bound, || extent(slot), input);
                 }
@@ -607,12 +882,23 @@ fn rules(ui: &mut egui::Ui, workspace: &mut Workspace, tokens: theme::Tokens) ->
         });
         ui.add_space(6.0);
     }
-    if !any { ui.label(RichText::new("No filters in this mode.").color(tokens.text_muted)); }
-    if let Some(index) = delete { workspace.rules.remove(index); rebuild = true; }
+    if !any {
+        ui.label(RichText::new("No filters in this mode.").color(tokens.text_muted));
+    }
+    if let Some(index) = delete {
+        workspace.rules.remove(index);
+        rebuild = true;
+    }
     rebuild
 }
 
-fn bound_row(ui: &mut egui::Ui, label: &str, bound: &mut Option<f64>, default: impl FnOnce() -> f64, input: XInput) -> bool {
+fn bound_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    bound: &mut Option<f64>,
+    default: impl FnOnce() -> f64,
+    input: XInput,
+) -> bool {
     let mut enabled = bound.is_some();
     let mut value = bound.unwrap_or(f64::NAN);
     let mut changed = false;
@@ -629,6 +915,8 @@ fn bound_row(ui: &mut egui::Ui, label: &str, bound: &mut Option<f64>, default: i
             ui.label(RichText::new("Any").weak());
         }
     });
-    if changed { *bound = enabled.then_some(value); }
+    if changed {
+        *bound = enabled.then_some(value);
+    }
     changed
 }

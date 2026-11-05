@@ -496,10 +496,19 @@ pub(crate) fn python_script(
     // are not resurrected in the script.
     let mut selections = Vec::new();
     for series in &workspace.series {
-        let Some(table) = workspace.tables.tabs.get(series.source) else { continue };
+        let Some(table) = workspace.tables.tabs.get(series.source) else {
+            continue;
+        };
         let columns = table.data.columns();
-        let position = |key: &str| columns.iter().position(|column| clean_col(&column.name) == key);
-        if let (Some(x), Some(y)) = (workspace.x_key.as_deref().and_then(position), position(&series.key)) {
+        let position = |key: &str| {
+            columns
+                .iter()
+                .position(|column| clean_col(&column.name) == key)
+        };
+        if let (Some(x), Some(y)) = (
+            workspace.x_key.as_deref().and_then(position),
+            position(&series.key),
+        ) {
             if !selections.contains(&(series.source, x, y)) {
                 selections.push((series.source, x, y));
             }

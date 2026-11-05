@@ -241,7 +241,11 @@ impl DataExportDialog {
                 // Exactly what the chart shows for this source, in plot order;
                 // series removed from the chart are not exported.
                 let mut indices: Vec<usize> = x_index.into_iter().collect();
-                for series in workspace.series.iter().filter(|series| series.source == self.source) {
+                for series in workspace
+                    .series
+                    .iter()
+                    .filter(|series| series.source == self.source)
+                {
                     if let Some(index) = columns
                         .iter()
                         .position(|column| clean_col(&column.name) == series.key)

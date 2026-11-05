@@ -96,15 +96,25 @@ impl DistinctValues {
         match &column.data {
             ColumnData::Float(values) | ColumnData::DateTime(values) => {
                 if let Some(&value) = values.get(row) {
-                    if value.is_nan() { self.missing = true; }
-                    else { self.numbers.insert(if value == 0.0 { 0.0f64.to_bits() } else { value.to_bits() }); }
+                    if value.is_nan() {
+                        self.missing = true;
+                    } else {
+                        self.numbers.insert(if value == 0.0 {
+                            0.0f64.to_bits()
+                        } else {
+                            value.to_bits()
+                        });
+                    }
                 }
             }
             ColumnData::Str(values) => {
                 if let Some(value) = values.get(row) {
                     let value = value.trim();
-                    if value.is_empty() || value == "-" { self.missing = true; }
-                    else if !self.strings.contains(value) { self.strings.insert(value.to_owned()); }
+                    if value.is_empty() || value == "-" {
+                        self.missing = true;
+                    } else if !self.strings.contains(value) {
+                        self.strings.insert(value.to_owned());
+                    }
                 }
             }
         }
@@ -136,11 +146,17 @@ struct CardinalityScan {
 }
 impl CardinalityScan {
     fn new(table: &Table) -> Self {
-        let mut order: Vec<_> = (0..table.ncols()).filter(|&index| {
-            !(index == 0 && table.data.column(index).name == "Index")
-        }).collect();
+        let mut order: Vec<_> = (0..table.ncols())
+            .filter(|&index| !(index == 0 && table.data.column(index).name == "Index"))
+            .collect();
         order.sort_by_key(|&index| split_priority(&table.data.column(index).name));
-        Self { order, position: 0, row: 0, values: DistinctValues::default(), candidates: Vec::new() }
+        Self {
+            order,
+            position: 0,
+            row: 0,
+            values: DistinctValues::default(),
+            candidates: Vec::new(),
+        }
     }
     fn advance(&mut self, table: &Table, mut budget: usize) -> bool {
         while self.position < self.order.len() && budget > 0 {
@@ -168,13 +184,27 @@ impl CardinalityScan {
 /// The column that tells interleaved devices apart and how many there are.
 /// Inspects a bounded prefix; the split itself uses every row.
 pub(crate) fn interleaved_suggestion(table: &Table, x_key: Option<&str>) -> Option<(usize, usize)> {
-    let time_index = x_key.and_then(|key| table.data.columns().iter().position(|column| clean_col(&column.name) == key))
-        .filter(|&index| {
-            let column = table.data.column(index);
-            let (_, unit) = split_name_unit(&column.name);
-            column.is_datetime() || parse_unit(&unit).family == UnitFamily::Time || clean_col(&column.name).contains("time")
-        })
-        .or_else(|| table.data.columns().iter().position(|column| column.is_datetime() || clean_col(&column.name).contains("time")))?;
+    let time_index =
+        x_key
+            .and_then(|key| {
+                table
+                    .data
+                    .columns()
+                    .iter()
+                    .position(|column| clean_col(&column.name) == key)
+            })
+            .filter(|&index| {
+                let column = table.data.column(index);
+                let (_, unit) = split_name_unit(&column.name);
+                column.is_datetime()
+                    || parse_unit(&unit).family == UnitFamily::Time
+                    || clean_col(&column.name).contains("time")
+            })
+            .or_else(|| {
+                table.data.columns().iter().position(|column| {
+                    column.is_datetime() || clean_col(&column.name).contains("time")
+                })
+            })?;
     let xs = match &table.data.column(time_index).data {
         ColumnData::Float(values) | ColumnData::DateTime(values) => values,
         ColumnData::Str(_) => return None,
@@ -186,23 +216,34 @@ pub(crate) fn interleaved_suggestion(table: &Table, x_key: Option<&str>) -> Opti
         if previous == Some(value) {
             length += 1;
         } else {
-            if length > 0 { *runs.entry(length).or_default() += 1; }
+            if length > 0 {
+                *runs.entry(length).or_default() += 1;
+            }
             previous = Some(value);
             length = 1;
         }
     }
-    if length > 0 { *runs.entry(length).or_default() += 1; }
+    if length > 0 {
+        *runs.entry(length).or_default() += 1;
+    }
     let (&repeat, &frequency) = runs.iter().max_by_key(|(_, frequency)| *frequency)?;
-    if !(2..=64).contains(&repeat) || frequency < 2 { return None; }
-    let mut indices: Vec<_> = (0..table.ncols()).filter(|&index| index != time_index
-        && !(index == 0 && table.data.column(index).name == "Index")).collect();
+    if !(2..=64).contains(&repeat) || frequency < 2 {
+        return None;
+    }
+    let mut indices: Vec<_> = (0..table.ncols())
+        .filter(|&index| {
+            index != time_index && !(index == 0 && table.data.column(index).name == "Index")
+        })
+        .collect();
     indices.sort_by_key(|&index| split_priority(&table.data.column(index).name));
     for index in indices {
         let column = table.data.column(index);
         let mut distinct = DistinctValues::default();
         for row in 0..column.len().min(4096) {
             distinct.add(column, row);
-            if distinct.len() > repeat { break; }
+            if distinct.len() > repeat {
+                break;
+            }
         }
         if distinct.len() == repeat {
             return Some((index, repeat));
@@ -218,7 +259,11 @@ fn source_summary(table: &Table, x_key: Option<&str>, precision: usize) -> Strin
         count(table.ncols().saturating_sub(1))
     );
     let Some(column) = x_key.and_then(|key| {
-        table.data.columns().iter().find(|column| clean_col(&column.name) == key)
+        table
+            .data
+            .columns()
+            .iter()
+            .find(|column| clean_col(&column.name) == key)
     }) else {
         return summary;
     };
@@ -237,7 +282,8 @@ fn source_summary(table: &Table, x_key: Option<&str>, precision: usize) -> Strin
     let Some((first_index, &first)) = values.iter().enumerate().find(|(_, x)| x.is_finite()) else {
         return summary;
     };
-    let Some((last_index, &last)) = values.iter().enumerate().rev().find(|(_, x)| x.is_finite()) else {
+    let Some((last_index, &last)) = values.iter().enumerate().rev().find(|(_, x)| x.is_finite())
+    else {
         return summary;
     };
     let duration = (last - first) * factor;
@@ -353,7 +399,8 @@ impl Sidebar {
             .zip(&workspace.sources)
             .map(|(table, source)| (table.identity(), source.active))
             .collect();
-        if signature != self.presence_signature || self.catalog_revision != workspace.data_revision {
+        if signature != self.presence_signature || self.catalog_revision != workspace.data_revision
+        {
             self.presence_signature = signature;
             self.catalog_revision = workspace.data_revision;
             self.presence.clear();
@@ -371,7 +418,9 @@ impl Sidebar {
                         .map(|column| clean_col(&column.name))
                         .collect();
                     for key in keys {
-                        self.preview_sources.entry(key.clone()).or_insert(table.identity());
+                        self.preview_sources
+                            .entry(key.clone())
+                            .or_insert(table.identity());
                         *self.presence.entry(key).or_default() += 1;
                     }
                 }
@@ -386,9 +435,15 @@ impl Sidebar {
         let by_source = match workspace.panes.color_by {
             ColorBy::Source => true,
             ColorBy::Channel => false,
-            ColorBy::Auto => active_sources > 1 && workspace.series.iter().any(|series| {
-                workspace.series.iter().all(|other| other.pane != series.pane || other.key == series.key)
-            }),
+            ColorBy::Auto => {
+                active_sources > 1
+                    && workspace.series.iter().any(|series| {
+                        workspace
+                            .series
+                            .iter()
+                            .all(|other| other.pane != series.pane || other.key == series.key)
+                    })
+            }
         };
         let mut source_action = None;
         ui.add_space(3.0);
@@ -398,52 +453,98 @@ impl Sidebar {
                 if widgets::icon_button(ui, icons::PLUS, "Add files · Ctrl+Shift+O").clicked() {
                     output.add = true;
                 }
-                ui.menu_button(egui::RichText::new(icons::MORE).family(theme::icon_family()), |ui| {
-                    if ui.add_enabled(source_count > 1, egui::Button::new("Sort by name")).clicked() {
-                        source_action = Some(SourceAction::Sort);
-                        ui.close();
-                    }
-                    if ui.add_enabled(active_sources > 1, egui::Button::new("Align all starts"))
-                        .on_hover_text("Start every selected source at zero and clear offsets")
-                        .clicked()
-                    {
-                        source_action = Some(SourceAction::AlignAll);
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.add_enabled(active_sources > 1, egui::Button::new("Merge selected on X")).clicked() {
-                        source_action = Some(SourceAction::Merge);
-                        ui.close();
-                    }
-                    if ui.add_enabled(active_sources > 1, egui::Button::new("Stack selected rows")).clicked() {
-                        source_action = Some(SourceAction::Stack);
-                        ui.close();
-                    }
-                    ui.checkbox(&mut self.stack_common_only, "Stack common columns only");
-                    if ui.add_enabled(active_sources > 0, egui::Button::new("Transpose selected")).clicked() {
-                        source_action = Some(SourceAction::TransposeActive);
-                        ui.close();
-                    }
-                    ui.label(egui::RichText::new("Selected sources are checked above.").small().color(tokens.text_muted));
-                }).response.on_hover_text("Source actions");
+                ui.menu_button(
+                    egui::RichText::new(icons::MORE).family(theme::icon_family()),
+                    |ui| {
+                        if ui
+                            .add_enabled(source_count > 1, egui::Button::new("Sort by name"))
+                            .clicked()
+                        {
+                            source_action = Some(SourceAction::Sort);
+                            ui.close();
+                        }
+                        if ui
+                            .add_enabled(active_sources > 1, egui::Button::new("Align all starts"))
+                            .on_hover_text("Start every selected source at zero and clear offsets")
+                            .clicked()
+                        {
+                            source_action = Some(SourceAction::AlignAll);
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui
+                            .add_enabled(
+                                active_sources > 1,
+                                egui::Button::new("Merge selected on X"),
+                            )
+                            .clicked()
+                        {
+                            source_action = Some(SourceAction::Merge);
+                            ui.close();
+                        }
+                        if ui
+                            .add_enabled(
+                                active_sources > 1,
+                                egui::Button::new("Stack selected rows"),
+                            )
+                            .clicked()
+                        {
+                            source_action = Some(SourceAction::Stack);
+                            ui.close();
+                        }
+                        ui.checkbox(&mut self.stack_common_only, "Stack common columns only");
+                        if ui
+                            .add_enabled(
+                                active_sources > 0,
+                                egui::Button::new("Transpose selected"),
+                            )
+                            .clicked()
+                        {
+                            source_action = Some(SourceAction::TransposeActive);
+                            ui.close();
+                        }
+                        ui.label(
+                            egui::RichText::new("Selected sources are checked above.")
+                                .small()
+                                .color(tokens.text_muted),
+                        );
+                    },
+                )
+                .response
+                .on_hover_text("Source actions");
             });
         });
         // Offsets are in X axis units; timestamps shift in seconds.
         let offset_unit = match crate::ui::chart_view::x_axis_format(workspace).0 {
             dv_chart::AxisFormat::DateTime | dv_chart::AxisFormat::Duration => "s".to_owned(),
-            _ => workspace.x_key.as_ref()
-                .and_then(|key| workspace.channels.iter().find(|channel| &channel.key == key))
+            _ => workspace
+                .x_key
+                .as_ref()
+                .and_then(|key| {
+                    workspace
+                        .channels
+                        .iter()
+                        .find(|channel| &channel.key == key)
+                })
                 .map(|channel| channel.unit.clone())
                 .unwrap_or_default(),
         };
-        let offset_suffix = if offset_unit.is_empty() { String::new() } else { format!(" {offset_unit}") };
+        let offset_suffix = if offset_unit.is_empty() {
+            String::new()
+        } else {
+            format!(" {offset_unit}")
+        };
         let mut rename_commit = None;
         let mut rename_cancel = false;
         let list_height = (ui.available_height() * 0.4).max(150.0);
         // Sources already split need no split suggestion.
-        let split_parents: HashSet<String> = workspace.sources.iter()
+        let split_parents: HashSet<String> = workspace
+            .sources
+            .iter()
             .filter_map(|source| match &source.recipe {
-                Some(crate::workspace::GeneratedRecipe::Split { parent, .. }) => Some(parent.clone()),
+                Some(crate::workspace::GeneratedRecipe::Split { parent, .. }) => {
+                    Some(parent.clone())
+                }
                 _ => None,
             })
             .collect();
@@ -625,7 +726,8 @@ impl Sidebar {
                 Ok(()) => output.changed = true,
                 Err(error) => workspace.problems.push(error),
             },
-            Some(SourceAction::Split(index, column)) => match workspace.split_source(index, column) {
+            Some(SourceAction::Split(index, column)) => match workspace.split_source(index, column)
+            {
                 Ok(()) => output.changed = true,
                 Err(error) => workspace.problems.push(error),
             },
@@ -634,8 +736,12 @@ impl Sidebar {
                 Err(error) => workspace.problems.push(error),
             },
             Some(SourceAction::TransposeActive) => {
-                let indices: Vec<_> = workspace.sources.iter().enumerate()
-                    .filter_map(|(index, source)| source.active.then_some(index)).collect();
+                let indices: Vec<_> = workspace
+                    .sources
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, source)| source.active.then_some(index))
+                    .collect();
                 for index in indices {
                     match workspace.transpose_source(index) {
                         Ok(()) => output.changed = true,
@@ -835,14 +941,23 @@ impl Sidebar {
         } else {
             groups.push(("All channels".into(), matches.clone()));
         }
-        let ordered: Vec<_> = groups.iter().flat_map(|(_, indices)| indices.iter().copied()).collect();
-        let list_focused = self.keyboard_id.is_some_and(|id| ui.memory(|memory| memory.has_focus(id)));
-        let search_focused = search_response.as_ref().is_some_and(|response| response.has_focus());
+        let ordered: Vec<_> = groups
+            .iter()
+            .flat_map(|(_, indices)| indices.iter().copied())
+            .collect();
+        let list_focused = self
+            .keyboard_id
+            .is_some_and(|id| ui.memory(|memory| memory.has_focus(id)));
+        let search_focused = search_response
+            .as_ref()
+            .is_some_and(|response| response.has_focus());
         let direction = if list_focused || search_focused {
             ui.input_mut(|input| {
                 if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
                     1isize
-                } else if list_focused && input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                } else if list_focused
+                    && input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)
+                {
                     -1
                 } else {
                     0
@@ -854,11 +969,17 @@ impl Sidebar {
         let mut focus_target = None;
         if direction != 0 && !ordered.is_empty() {
             let current = if list_focused {
-                self.keyboard_key.as_ref().and_then(|key| ordered.iter().position(|&index| workspace.channels[index].key == *key))
+                self.keyboard_key.as_ref().and_then(|key| {
+                    ordered
+                        .iter()
+                        .position(|&index| workspace.channels[index].key == *key)
+                })
             } else {
                 None
             };
-            let next = current.map_or(0, |index| (index as isize + direction).clamp(0, ordered.len() as isize - 1) as usize);
+            let next = current.map_or(0, |index| {
+                (index as isize + direction).clamp(0, ordered.len() as isize - 1) as usize
+            });
             focus_target = Some(workspace.channels[ordered[next]].key.clone());
         }
         let mut previews_left = 3usize;
@@ -966,7 +1087,10 @@ impl Sidebar {
                             );
                             if badge_width > 0.0 {
                                 let right = rect.right() - unit_width - spark_width - 3.0;
-                                let badge = Rect::from_center_size(Pos2::new(right - 15.0, rect.center().y), Vec2::new(29.0, 18.0));
+                                let badge = Rect::from_center_size(
+                                    Pos2::new(right - 15.0, rect.center().y),
+                                    Vec2::new(29.0, 18.0),
+                                );
                                 painter.rect_filled(badge, 4.0, tokens.accent_soft);
                                 painter.text(
                                     badge.center(),
@@ -995,19 +1119,24 @@ impl Sidebar {
                                 }
                             );
                             if settings.show_sparklines {
-                                let cache_key = self.preview_sources.get(&channel.key)
+                                let cache_key = self
+                                    .preview_sources
+                                    .get(&channel.key)
                                     .map(|&identity| (identity, channel.key.clone()));
                                 if let Some(cache_key) = cache_key {
                                     if !self.previews.contains_key(&cache_key) {
                                         if previews_left > 0 {
                                             previews_left -= 1;
-                                            let value = preview(workspace, &channel.key).map(|(_, value)| value);
+                                            let value = preview(workspace, &channel.key)
+                                                .map(|(_, value)| value);
                                             self.previews.insert(cache_key.clone(), value);
                                         } else {
                                             ui.ctx().request_repaint();
                                         }
                                     }
-                                    if let Some(p) = self.previews.get(&cache_key).and_then(Option::as_ref) {
+                                    if let Some(p) =
+                                        self.previews.get(&cache_key).and_then(Option::as_ref)
+                                    {
                                         let spark = Rect::from_min_size(
                                             Pos2::new(rect.right() - 43.0, rect.top() + 5.0),
                                             Vec2::new(39.0, 17.0),
@@ -1042,15 +1171,33 @@ impl Sidebar {
                                         tooltip.push_str(&format!(
                                             "\n{}min {} · mean {} · max {}",
                                             if p.sampled { "Preview: " } else { "" },
-                                            dv_chart::format::format_value(p.min, &channel.unit, settings.precision),
-                                            dv_chart::format::format_value(p.mean, &channel.unit, settings.precision),
-                                            dv_chart::format::format_value(p.max, &channel.unit, settings.precision)
+                                            dv_chart::format::format_value(
+                                                p.min,
+                                                &channel.unit,
+                                                settings.precision
+                                            ),
+                                            dv_chart::format::format_value(
+                                                p.mean,
+                                                &channel.unit,
+                                                settings.precision
+                                            ),
+                                            dv_chart::format::format_value(
+                                                p.max,
+                                                &channel.unit,
+                                                settings.precision
+                                            )
                                         ));
                                     }
                                 }
                             }
                             response.clone().on_hover_text(tooltip);
-                            if response.clicked() || (response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Space) || input.key_pressed(egui::Key::Enter))) {
+                            if response.clicked()
+                                || (response.has_focus()
+                                    && ui.input(|input| {
+                                        input.key_pressed(egui::Key::Space)
+                                            || input.key_pressed(egui::Key::Enter)
+                                    }))
+                            {
                                 response.request_focus();
                                 self.keyboard_key = Some(channel.key.clone());
                                 self.keyboard_id = Some(response.id);

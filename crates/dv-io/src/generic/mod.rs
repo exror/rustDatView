@@ -60,7 +60,8 @@ impl FileObject for GenericFile {
         let first_unit = dv_core::common::unit(&columns.first()?.name);
         if columns.len() < 2
             || !columns.iter().all(|c| {
-                matches!(c.data, ColumnData::Float(_)) && dv_core::common::unit(&c.name) == first_unit
+                matches!(c.data, ColumnData::Float(_))
+                    && dv_core::common::unit(&c.name) == first_unit
             })
         {
             return None;

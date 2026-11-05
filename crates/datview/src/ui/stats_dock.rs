@@ -260,30 +260,40 @@ impl StatsWorker {
                 }
                 let summary = summarize(&job.x, &job.y, job.range);
                 let above = job.threshold.map(|threshold| {
-                    (threshold.to_bits(), time_above(&job.x, &job.y, threshold, job.range))
+                    (
+                        threshold.to_bits(),
+                        time_above(&job.x, &job.y, threshold, job.range),
+                    )
                 });
                 if current.load(AtomicOrdering::Relaxed) != job.epoch {
                     continue;
                 }
                 let context = job.context;
-                if results.send(StatsResult {
-                    epoch: job.epoch,
-                    id: job.id,
-                    slot: job.slot,
-                    cached: CachedSummary {
-                        key: job.key,
-                        summary,
-                        unit: job.unit,
-                        x_unit: job.x_unit,
-                        above,
-                    },
-                }).is_err() {
+                if results
+                    .send(StatsResult {
+                        epoch: job.epoch,
+                        id: job.id,
+                        slot: job.slot,
+                        cached: CachedSummary {
+                            key: job.key,
+                            summary,
+                            unit: job.unit,
+                            x_unit: job.x_unit,
+                            above,
+                        },
+                    })
+                    .is_err()
+                {
                     break;
                 }
                 context.request_repaint();
             }
         });
-        Self { send, receive, epoch }
+        Self {
+            send,
+            receive,
+            epoch,
+        }
     }
 }
 
@@ -321,9 +331,19 @@ impl StatsDock {
         } else {
             self.settings.scope
         };
-        let active_sources = workspace.sources.iter().filter(|source| source.active).count();
-        if !workspace.sources.iter().any(|source| source.active && self.reference.as_deref() == Some(source.stable_key().as_str())) {
-            self.reference = workspace.sources.iter().find(|source| source.active).map(|source| source.stable_key());
+        let active_sources = workspace
+            .sources
+            .iter()
+            .filter(|source| source.active)
+            .count();
+        if !workspace.sources.iter().any(|source| {
+            source.active && self.reference.as_deref() == Some(source.stable_key().as_str())
+        }) {
+            self.reference = workspace
+                .sources
+                .iter()
+                .find(|source| source.active)
+                .map(|source| source.stable_key());
         }
         ui.horizontal(|ui| {
             super::widgets::section_label(ui, "Statistics");
@@ -428,12 +448,20 @@ impl StatsDock {
         }
 
         let scope = effective_scope;
-        let reference = (self.compare && active_sources > 1).then(|| {
-            workspace.sources.iter().position(|source| source.active && self.reference.as_deref() == Some(source.stable_key().as_str()))
-        }).flatten();
+        let reference = (self.compare && active_sources > 1)
+            .then(|| {
+                workspace.sources.iter().position(|source| {
+                    source.active && self.reference.as_deref() == Some(source.stable_key().as_str())
+                })
+            })
+            .flatten();
         let updating = self.update_cache(workspace, chart, link_x, scope, reference, ui.ctx());
         if updating {
-            ui.label(RichText::new("Updating statistics…").small().color(tokens.text_muted));
+            ui.label(
+                RichText::new("Updating statistics…")
+                    .small()
+                    .color(tokens.text_muted),
+            );
         }
         if workspace.series.is_empty() && workspace.selected.is_empty() {
             ui.add_space(6.0);
@@ -443,7 +471,9 @@ impl StatsDock {
         }
         let slot = scope_index(scope);
         let tags = workspace.source_tags();
-        let all_rows: Vec<_> = workspace.series.iter()
+        let all_rows: Vec<_> = workspace
+            .series
+            .iter()
             .filter_map(|series| {
                 let cached = self.cache.get(&series.id)?.get(slot)?.as_ref()?;
                 let source = tags.get(series.source).map_or("", String::as_str);
@@ -467,16 +497,24 @@ impl StatsDock {
                 })
             })
             .collect();
-        let references: HashMap<&str, Row<'_>> = all_rows.iter()
+        let references: HashMap<&str, Row<'_>> = all_rows
+            .iter()
             .filter(|row| Some(row.series.source) == reference)
             .map(|row| (row.series.key.as_str(), *row))
             .collect();
-        let mut rows: Vec<_> = all_rows.into_iter()
-            .filter(|row| !chart.hidden.contains(&row.series.id)).collect();
+        let mut rows: Vec<_> = all_rows
+            .into_iter()
+            .filter(|row| !chart.hidden.contains(&row.series.id))
+            .collect();
         if let Some(sort) = self.sort {
             rows.sort_by(|a, b| compare_rows(a, b, sort));
         }
-        let multiple_sources = workspace.sources.iter().filter(|source| source.active).count() > 1;
+        let multiple_sources = workspace
+            .sources
+            .iter()
+            .filter(|source| source.active)
+            .count()
+            > 1;
         let mut requested_sort = None;
         let columns = &self.settings.columns;
         let height = ui.available_height().max(50.0);
@@ -626,8 +664,13 @@ impl StatsDock {
             });
         }
         if let Some(format) = action {
-            ui.ctx()
-                .copy_text(serialize_rows(&rows, columns, multiple_sources, format, reference.map(|_| &references)));
+            ui.ctx().copy_text(serialize_rows(
+                &rows,
+                columns,
+                multiple_sources,
+                format,
+                reference.map(|_| &references),
+            ));
         }
         if export {
             if let Some(path) = rfd::FileDialog::new()
@@ -635,7 +678,13 @@ impl StatsDock {
                 .add_filter("CSV", &["csv"])
                 .save_file()
             {
-                let text = serialize_rows(&rows, columns, multiple_sources, CopyFormat::Csv, reference.map(|_| &references));
+                let text = serialize_rows(
+                    &rows,
+                    columns,
+                    multiple_sources,
+                    CopyFormat::Csv,
+                    reference.map(|_| &references),
+                );
                 if let Err(error) = std::fs::write(&path, text) {
                     return Some(format!(
                         "Could not export statistics to {}: {error}",
@@ -659,28 +708,41 @@ impl StatsDock {
         const DEBOUNCE: Duration = Duration::from_millis(150);
         const BACKGROUND_SAMPLES: usize = 200_000;
         if self.cache.len() > workspace.series.len().saturating_mul(2).saturating_add(16) {
-            self.cache.retain(|id, _| workspace.series.iter().any(|series| series.id == *id));
+            self.cache
+                .retain(|id, _| workspace.series.iter().any(|series| series.id == *id));
         }
-        let threshold = self.settings.columns.contains(&StatsColumn::TimeAbove)
+        let threshold = self
+            .settings
+            .columns
+            .contains(&StatsColumn::TimeAbove)
             .then_some(self.settings.threshold);
         let slot = scope_index(scope);
-        let candidates: Vec<_> = workspace.series.iter()
+        let candidates: Vec<_> = workspace
+            .series
+            .iter()
             .filter(|series| !chart.hidden.contains(&series.id) || Some(series.source) == reference)
             .map(|series| {
                 let range = match scope {
                     StatsScope::Selection => chart.selection,
                     StatsScope::All => None,
-                    StatsScope::View if !link_x => chart.pane_x_views
-                        .get(&pane_id(&series.pane)).copied().or(chart.x_view),
+                    StatsScope::View if !link_x => chart
+                        .pane_x_views
+                        .get(&pane_id(&series.pane))
+                        .copied()
+                        .or(chart.x_view),
                     StatsScope::View => chart.x_view,
-                }.filter(valid_range).map(normalize_range);
+                }
+                .filter(valid_range)
+                .map(normalize_range);
                 let key = CacheKey {
                     generation: series.generation,
                     range: range.map(|range| [range[0].to_bits(), range[1].to_bits()]),
                 };
                 (series, range, key)
-            }).collect();
-        let requested: Vec<_> = candidates.iter()
+            })
+            .collect();
+        let requested: Vec<_> = candidates
+            .iter()
             .map(|(series, _, key)| (series.id, slot, *key, threshold.map(f64::to_bits)))
             .collect();
         if requested != self.requested {
@@ -701,17 +763,27 @@ impl StatsDock {
                     continue;
                 }
                 self.pending.remove(&id);
-                let slots = self.cache.entry(result.id)
+                let slots = self
+                    .cache
+                    .entry(result.id)
                     .or_insert_with(|| std::array::from_fn(|_| None));
                 slots[result.slot] = Some(result.cached);
             }
         }
         let mut updating = false;
         for (series, range, key) in candidates {
-            let ready = self.cache.get(&series.id).and_then(|slots| slots[slot].as_ref())
-                .is_some_and(|cached| cached.key == key && threshold.is_none_or(|value| {
-                    cached.above.is_some_and(|(bits, _)| bits == value.to_bits())
-                }));
+            let ready = self
+                .cache
+                .get(&series.id)
+                .and_then(|slots| slots[slot].as_ref())
+                .is_some_and(|cached| {
+                    cached.key == key
+                        && threshold.is_none_or(|value| {
+                            cached
+                                .above
+                                .is_some_and(|(bits, _)| bits == value.to_bits())
+                        })
+                });
             if ready {
                 continue;
             }
@@ -723,8 +795,16 @@ impl StatsDock {
             }
             if series.x.len().min(series.y.len()) <= BACKGROUND_SAMPLES {
                 let summary = summarize(&series.x, &series.y, range);
-                let above = threshold.map(|value| (value.to_bits(), time_above(&series.x, &series.y, value, range)));
-                let slots = self.cache.entry(series.id).or_insert_with(|| std::array::from_fn(|_| None));
+                let above = threshold.map(|value| {
+                    (
+                        value.to_bits(),
+                        time_above(&series.x, &series.y, value, range),
+                    )
+                });
+                let slots = self
+                    .cache
+                    .entry(series.id)
+                    .or_insert_with(|| std::array::from_fn(|_| None));
                 slots[slot] = Some(CachedSummary {
                     key,
                     summary,
@@ -988,14 +1068,19 @@ fn delta_values(value: f64, reference: f64) -> Option<(f64, Option<f64>)> {
     if !delta.is_finite() {
         return None;
     }
-    let percent = (reference != 0.0).then(|| delta / reference * 100.0)
+    let percent = (reference != 0.0)
+        .then(|| delta / reference * 100.0)
         .filter(|number| number.is_finite());
     Some((delta, percent))
 }
 
 /// Convert the reference statistic to the displayed row's units before
 /// comparing. Affine temperatures need different treatment from differences.
-fn comparison(row: &Row<'_>, reference: &Row<'_>, column: StatsColumn) -> Option<(f64, Option<f64>)> {
+fn comparison(
+    row: &Row<'_>,
+    reference: &Row<'_>,
+    column: StatsColumn,
+) -> Option<(f64, Option<f64>)> {
     if row.series.source == reference.series.source {
         return None;
     }
@@ -1009,15 +1094,30 @@ fn comparison(row: &Row<'_>, reference: &Row<'_>, column: StatsColumn) -> Option
         Some((scale, offset))
     };
     let x = || {
-        let offset = reference.cached.x_unit.convert_value(0.0, &row.cached.x_unit)?;
-        let scale = reference.cached.x_unit.convert_value(1.0, &row.cached.x_unit)? - offset;
+        let offset = reference
+            .cached
+            .x_unit
+            .convert_value(0.0, &row.cached.x_unit)?;
+        let scale = reference
+            .cached
+            .x_unit
+            .convert_value(1.0, &row.cached.x_unit)?
+            - offset;
         Some((scale, offset))
     };
     let converted = match column {
         StatsColumn::N | StatsColumn::Ti | StatsColumn::Energy => raw,
-        StatsColumn::Min | StatsColumn::Mean | StatsColumn::Max | StatsColumn::P99
-        | StatsColumn::Median | StatsColumn::P1 | StatsColumn::P5 | StatsColumn::P95
-        | StatsColumn::Start | StatsColumn::End | StatsColumn::IntegralMean => {
+        StatsColumn::Min
+        | StatsColumn::Mean
+        | StatsColumn::Max
+        | StatsColumn::P99
+        | StatsColumn::Median
+        | StatsColumn::P1
+        | StatsColumn::P5
+        | StatsColumn::P95
+        | StatsColumn::Start
+        | StatsColumn::End
+        | StatsColumn::IntegralMean => {
             let (scale, offset) = y()?;
             raw * scale + offset
         }
@@ -1025,29 +1125,41 @@ fn comparison(row: &Row<'_>, reference: &Row<'_>, column: StatsColumn) -> Option
         StatsColumn::Rms => {
             let (scale, offset) = y()?;
             (scale * scale * raw * raw
-                + 2.0 * scale * offset * reference.cached.summary.mean + offset * offset).max(0.0).sqrt()
+                + 2.0 * scale * offset * reference.cached.summary.mean
+                + offset * offset)
+                .max(0.0)
+                .sqrt()
         }
         StatsColumn::AbsMax => {
             let (scale, offset) = y()?;
-            (reference.cached.summary.min * scale + offset).abs()
+            (reference.cached.summary.min * scale + offset)
+                .abs()
                 .max((reference.cached.summary.max * scale + offset).abs())
         }
         StatsColumn::Variance => raw * y()?.0.powi(2),
         StatsColumn::Slope => raw * y()?.0 / x()?.0,
         StatsColumn::XAtMin | StatsColumn::XAtMax => {
-            if row.datetime != reference.datetime { return None; }
+            if row.datetime != reference.datetime {
+                return None;
+            }
             let (scale, offset) = x()?;
             raw * scale + offset
         }
         StatsColumn::TimeAbove => {
-            if row.cached.unit != reference.cached.unit { return None; }
+            if row.cached.unit != reference.cached.unit {
+                return None;
+            }
             raw * x()?.0
         }
-        StatsColumn::Duration | StatsColumn::MeanDx | StatsColumn::IntegralXNormalized => raw * x()?.0,
+        StatsColumn::Duration | StatsColumn::MeanDx | StatsColumn::IntegralXNormalized => {
+            raw * x()?.0
+        }
         StatsColumn::Integral | StatsColumn::IntegralX | StatsColumn::IntegralX2 => {
             let (y_scale, y_offset) = y()?;
             let (x_scale, x_offset) = x()?;
-            if y_offset != 0.0 || x_offset != 0.0 { return None; }
+            if y_offset != 0.0 || x_offset != 0.0 {
+                return None;
+            }
             let power = match column {
                 StatsColumn::Integral => 1,
                 StatsColumn::IntegralX => 2,
@@ -1060,13 +1172,19 @@ fn comparison(row: &Row<'_>, reference: &Row<'_>, column: StatsColumn) -> Option
 }
 
 fn signed(text: String, value: f64) -> String {
-    if value > 0.0 { format!("+{text}") } else { text }
+    if value > 0.0 {
+        format!("+{text}")
+    } else {
+        text
+    }
 }
 
 fn delta_unit(row: &Row<'_>, column: StatsColumn) -> String {
     match column {
         StatsColumn::N | StatsColumn::Ti => String::new(),
-        StatsColumn::XAtMin | StatsColumn::XAtMax if row.datetime => row.cached.x_unit.symbol.clone(),
+        StatsColumn::XAtMin | StatsColumn::XAtMax if row.datetime => {
+            row.cached.x_unit.symbol.clone()
+        }
         column if has_derived_unit(column) => export_unit(row, column),
         _ => row.cached.unit.symbol.clone(),
     }
@@ -1252,11 +1370,16 @@ fn serialize_rows(
                 record.push(export_unit(row, column));
             }
             if let Some(references) = references {
-                let compared = references.get(row.series.key.as_str())
+                let compared = references
+                    .get(row.series.key.as_str())
                     .and_then(|base| comparison(row, base, column));
                 record.push(compared.map_or_else(String::new, |(delta, _)| delta.to_string()));
                 record.push(delta_unit(row, column));
-                record.push(compared.and_then(|(_, percent)| percent).map_or_else(String::new, |percent| percent.to_string()));
+                record.push(
+                    compared
+                        .and_then(|(_, percent)| percent)
+                        .map_or_else(String::new, |percent| percent.to_string()),
+                );
             }
         }
         append_record(&mut output, &record, format);
@@ -1370,7 +1493,10 @@ mod tests {
 
     fn summary(series: &SeriesData) -> CachedSummary {
         CachedSummary {
-            key: CacheKey { generation: 1, range: None },
+            key: CacheKey {
+                generation: 1,
+                range: None,
+            },
             summary: summarize(&series.x, &series.y, None),
             unit: parse_unit(&series.unit),
             x_unit: parse_unit("s"),
@@ -1378,8 +1504,18 @@ mod tests {
         }
     }
 
-    fn row<'a>(series: &'a SeriesData, cached: &'a CachedSummary, energy_factor: Option<f64>) -> Row<'a> {
-        Row { series, source: "", cached, energy_factor, datetime: false }
+    fn row<'a>(
+        series: &'a SeriesData,
+        cached: &'a CachedSummary,
+        energy_factor: Option<f64>,
+    ) -> Row<'a> {
+        Row {
+            series,
+            source: "",
+            cached,
+            energy_factor,
+            datetime: false,
+        }
     }
 
     #[test]

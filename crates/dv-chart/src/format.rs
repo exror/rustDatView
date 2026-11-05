@@ -327,10 +327,19 @@ pub fn parse_seconds(text: &str) -> Option<f64> {
         Some(rest) => (true, rest.trim_start()),
         None => (false, text.as_str()),
     };
-    let (number, scale) = [("ns", 1e-9), ("µs", 1e-6), ("us", 1e-6), ("ms", 1e-3), ("s", 1.0)]
-        .into_iter()
-        .find_map(|(suffix, scale)| text.strip_suffix(suffix).map(|rest| (rest.trim_end(), scale)))
-        .unwrap_or((text, 1.0));
+    let (number, scale) = [
+        ("ns", 1e-9),
+        ("µs", 1e-6),
+        ("us", 1e-6),
+        ("ms", 1e-3),
+        ("s", 1.0),
+    ]
+    .into_iter()
+    .find_map(|(suffix, scale)| {
+        text.strip_suffix(suffix)
+            .map(|rest| (rest.trim_end(), scale))
+    })
+    .unwrap_or((text, 1.0));
     let parts: Vec<&str> = number.split(':').collect();
     if parts.len() > 3 || (parts.len() > 1 && scale != 1.0) {
         return None;
@@ -387,10 +396,14 @@ mod tests {
 
     #[test]
     fn parsed_seconds_round_trip_formatted_times() {
-        assert_eq!(parse_seconds(&format_duration(-3723.456, 0.001)), Some(-3723.456));
+        assert_eq!(
+            parse_seconds(&format_duration(-3723.456, 0.001)),
+            Some(-3723.456)
+        );
         assert_eq!(parse_seconds(&format_duration(65.5, 0.1)), Some(65.5));
         let close = |text: &str, expected: f64| {
-            parse_seconds(text).is_some_and(|value| (value - expected).abs() <= expected.abs() * 1e-12)
+            parse_seconds(text)
+                .is_some_and(|value| (value - expected).abs() <= expected.abs() * 1e-12)
         };
         assert!(close(&format_value(0.0012, "s", 6), 0.0012));
         assert!(close("12 µs", 12e-6));

@@ -231,7 +231,11 @@ fn string_choice(
         .unwrap_or("Unknown");
     let mut changed = false;
     ComboBox::from_id_salt(id)
-        .width(if id == "normalize_centering" { 180.0 } else { 125.0 })
+        .width(if id == "normalize_centering" {
+            180.0
+        } else {
+            125.0
+        })
         .selected_text(selected)
         .show_ui(ui, |ui| {
             for &(value, display) in choices {

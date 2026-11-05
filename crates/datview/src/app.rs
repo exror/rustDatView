@@ -250,7 +250,9 @@ impl DatView {
     /// Separate recordings opened together are compared from their starts.
     /// Overlapping recordings (simultaneous loggers) keep absolute time.
     fn align_separate_recordings(&mut self) {
-        let Some(indices) = self.workspace.separate_recordings() else { return };
+        let Some(indices) = self.workspace.separate_recordings() else {
+            return;
+        };
         let mut keys = Vec::with_capacity(indices.len());
         for index in indices {
             let source = &mut self.workspace.sources[index];
@@ -284,7 +286,12 @@ impl DatView {
                         self.workspace.remove_source(index);
                     }
                 }
-                if let Some(source) = self.workspace.sources.iter_mut().find(|source| source.stable_key() == parent) {
+                if let Some(source) = self
+                    .workspace
+                    .sources
+                    .iter_mut()
+                    .find(|source| source.stable_key() == parent)
+                {
                     source.active = true;
                 }
                 self.checked_sources = self.workspace.sources.len();
@@ -300,13 +307,18 @@ impl DatView {
     /// into one source per device, with an Undo in the notification.
     fn split_interleaved(&mut self, new: std::ops::Range<usize>) {
         for index in new.rev() {
-            let (Some(source), Some(table)) = (self.workspace.sources.get(index), self.workspace.tables.tabs.get(index)) else {
+            let (Some(source), Some(table)) = (
+                self.workspace.sources.get(index),
+                self.workspace.tables.tabs.get(index),
+            ) else {
                 continue;
             };
             if source.recipe.is_some() || source.path.as_os_str().is_empty() {
                 continue;
             }
-            let Some((column, devices)) = ui::sidebar::interleaved_suggestion(table, self.workspace.x_key.as_deref()) else {
+            let Some((column, devices)) =
+                ui::sidebar::interleaved_suggestion(table, self.workspace.x_key.as_deref())
+            else {
                 continue;
             };
             let parent = source.stable_key();
@@ -315,9 +327,14 @@ impl DatView {
             let before = self.workspace.sources.len();
             match self.workspace.split_source(index, column) {
                 Ok(()) => {
-                    let parts = self.workspace.sources[before..].iter().map(|source| source.stable_key()).collect();
+                    let parts = self.workspace.sources[before..]
+                        .iter()
+                        .map(|source| source.stable_key())
+                        .collect();
                     self.toasts.push(Toast {
-                        message: format!("{name} interleaves {devices} devices; split by {column_name}"),
+                        message: format!(
+                            "{name} interleaves {devices} devices; split by {column_name}"
+                        ),
                         error: false,
                         created: Instant::now(),
                         action: Some(ToastAction::UndoSplit { parent, parts }),
@@ -416,13 +433,27 @@ impl DatView {
             Ok(()) => {
                 Self::remember(&mut self.settings.recent_sessions, path.clone());
                 self.session_path = Some(path);
-                let unsaved = self.workspace.sources.iter().zip(&self.workspace.tables.tabs).filter(|(source, table)| {
-                    source.path.as_os_str().is_empty()
-                        && source.recipe.is_none()
-                        && !self.workspace.pipeline.actions.iter().any(|action| action.generated_table(table))
-                }).count();
+                let unsaved = self
+                    .workspace
+                    .sources
+                    .iter()
+                    .zip(&self.workspace.tables.tabs)
+                    .filter(|(source, table)| {
+                        source.path.as_os_str().is_empty()
+                            && source.recipe.is_none()
+                            && !self
+                                .workspace
+                                .pipeline
+                                .actions
+                                .iter()
+                                .any(|action| action.generated_table(table))
+                    })
+                    .count();
                 if unsaved > 0 {
-                    self.workspace.problems.push("Fit results are not saved in sessions; re-run the fit after opening it.".into());
+                    self.workspace.problems.push(
+                        "Fit results are not saved in sessions; re-run the fit after opening it."
+                            .into(),
+                    );
                 }
                 self.notify("Session saved", false);
             }
@@ -585,7 +616,12 @@ impl DatView {
             ctx.request_repaint();
         }
         let source_count = self.workspace.sources.len();
-        if self.workspace.loading.is_none() && self.restore.as_ref().is_none_or(|restore| !restore.is_pending()) {
+        if self.workspace.loading.is_none()
+            && self
+                .restore
+                .as_ref()
+                .is_none_or(|restore| !restore.is_pending())
+        {
             if source_count > self.checked_sources {
                 self.split_interleaved(self.checked_sources..source_count);
                 self.align_separate_recordings();
@@ -769,7 +805,11 @@ impl DatView {
                         return;
                     }
                     ui.add_space(6.0);
-                    let views = if self.fields.available() { &VIEWS[..] } else { &VIEWS[..3] };
+                    let views = if self.fields.available() {
+                        &VIEWS[..]
+                    } else {
+                        &VIEWS[..3]
+                    };
                     if let Some(view) = widgets::segmented(ui, self.view, views) {
                         self.view = view;
                     }
@@ -949,7 +989,10 @@ impl DatView {
             let mut messages = self.workspace.problems.clone();
             if let Some(restore) = &self.restore {
                 for missing in restore.unresolved() {
-                    if !messages.iter().any(|message| message.contains(&missing.reason)) {
+                    if !messages
+                        .iter()
+                        .any(|message| message.contains(&missing.reason))
+                    {
                         messages.push(missing.reason.clone());
                     }
                 }
@@ -972,30 +1015,63 @@ impl DatView {
         if let Some(context) = response.context {
             self.chart_context = Some(context);
         }
-        let Some(context) = self.chart_context else { return };
+        let Some(context) = self.chart_context else {
+            return;
+        };
         let mut rebuild = false;
         let mut copy_figure = false;
         response.response.context_menu(|ui| {
             let palette = theme::palette_for(theme::is_dark(ctx), self.settings.palette);
-            let target = context.series.and_then(|id| self.workspace.series.iter().find(|s| s.id == id))
+            let target = context
+                .series
+                .and_then(|id| self.workspace.series.iter().find(|s| s.id == id))
                 .map(|s| {
-                    let [r, g, b, _] = ui::chart_view::series_color(&self.workspace, &palette, s).to_srgba_unmultiplied();
-                    (s.id, s.key.clone(), s.label.clone(), [r, g, b], s.dash,
-                        self.workspace.mode == Mode::Signals && s.family == "Flags")
+                    let [r, g, b, _] = ui::chart_view::series_color(&self.workspace, &palette, s)
+                        .to_srgba_unmultiplied();
+                    (
+                        s.id,
+                        s.key.clone(),
+                        s.label.clone(),
+                        [r, g, b],
+                        s.dash,
+                        self.workspace.mode == Mode::Signals && s.family == "Flags",
+                    )
                 });
-            let anchor = context.series.and_then(|id| self.workspace.series.iter().find(|s| s.id == id))
-                .or_else(|| self.workspace.series.iter().find(|s| context.pane == Some(ui::chart_view::pane_id(&s.pane))));
+            let anchor = context
+                .series
+                .and_then(|id| self.workspace.series.iter().find(|s| s.id == id))
+                .or_else(|| {
+                    self.workspace
+                        .series
+                        .iter()
+                        .find(|s| context.pane == Some(ui::chart_view::pane_id(&s.pane)))
+                });
             let point_id = anchor.map(|s| s.id);
             let pane = anchor.map(|s| s.pane.clone());
             let unit = anchor.map(|s| s.unit.clone()).unwrap_or_default();
             if let Some((id, key, label, current_color, current_dash, flag)) = &target {
                 ui.strong(label);
-                if ui.button(if self.chart.hidden.contains(id) { "Show series" } else { "Hide series" }).clicked() {
-                    if !self.chart.hidden.remove(id) { self.chart.hidden.insert(*id); }
+                if ui
+                    .button(if self.chart.hidden.contains(id) {
+                        "Show series"
+                    } else {
+                        "Hide series"
+                    })
+                    .clicked()
+                {
+                    if !self.chart.hidden.remove(id) {
+                        self.chart.hidden.insert(*id);
+                    }
                     ui.close();
                 }
                 if ui.button("Show only this series").clicked() {
-                    self.chart.hidden = self.workspace.series.iter().filter(|s| s.id != *id).map(|s| s.id).collect();
+                    self.chart.hidden = self
+                        .workspace
+                        .series
+                        .iter()
+                        .filter(|s| s.id != *id)
+                        .map(|s| s.id)
+                        .collect();
                     ui.close();
                 }
                 if ui.button("Remove series").clicked() {
@@ -1005,7 +1081,12 @@ impl DatView {
                     ui.close();
                 }
                 ui.menu_button("Style", |ui| {
-                    let mut style = self.workspace.panes.style_for(*id, key).cloned().unwrap_or_default();
+                    let mut style = self
+                        .workspace
+                        .panes
+                        .style_for(*id, key)
+                        .cloned()
+                        .unwrap_or_default();
                     let mut changed = false;
                     let mut color = *current_color;
                     ui.horizontal(|ui| {
@@ -1016,13 +1097,21 @@ impl DatView {
                         }
                     });
                     let mut width = style.width.unwrap_or(self.settings.line_width);
-                    if ui.add(egui::Slider::new(&mut width, 0.5..=6.0).text("Width")).changed() {
+                    if ui
+                        .add(egui::Slider::new(&mut width, 0.5..=6.0).text("Width"))
+                        .changed()
+                    {
                         style.width = Some(width);
                         changed = true;
                     }
                     ui.menu_button("Dash", |ui| {
-                        for (dash, name) in [(0, "Solid"), (1, "Dashed"), (2, "Dotted"), (3, "Dash-dot")] {
-                            if ui.selectable_label(style.dash.unwrap_or(*current_dash) == dash, name).clicked() {
+                        for (dash, name) in
+                            [(0, "Solid"), (1, "Dashed"), (2, "Dotted"), (3, "Dash-dot")]
+                        {
+                            if ui
+                                .selectable_label(style.dash.unwrap_or(*current_dash) == dash, name)
+                                .clicked()
+                            {
                                 style.dash = Some(dash);
                                 changed = true;
                                 ui.close();
@@ -1030,10 +1119,21 @@ impl DatView {
                         }
                     });
                     ui.menu_button("Draw", |ui| {
-                        let default = if *flag { LineDraw::Steps } else { LineDraw::Lines };
-                        for (draw, name) in [(LineDraw::Lines, "Lines"), (LineDraw::Points, "Points"),
-                            (LineDraw::LinesPoints, "Lines + points"), (LineDraw::Steps, "Steps")] {
-                            if ui.selectable_label(style.draw.unwrap_or(default) == draw, name).clicked() {
+                        let default = if *flag {
+                            LineDraw::Steps
+                        } else {
+                            LineDraw::Lines
+                        };
+                        for (draw, name) in [
+                            (LineDraw::Lines, "Lines"),
+                            (LineDraw::Points, "Points"),
+                            (LineDraw::LinesPoints, "Lines + points"),
+                            (LineDraw::Steps, "Steps"),
+                        ] {
+                            if ui
+                                .selectable_label(style.draw.unwrap_or(default) == draw, name)
+                                .clicked()
+                            {
                                 style.draw = Some(draw);
                                 changed = true;
                                 ui.close();
@@ -1045,77 +1145,149 @@ impl DatView {
                         changed = true;
                     }
                     if changed {
-                        self.workspace.panes.styles.insert(PaneSettings::series_style_key(*id), style);
+                        self.workspace
+                            .panes
+                            .styles
+                            .insert(PaneSettings::series_style_key(*id), style);
                         rebuild = true;
                     }
                 });
                 ui.separator();
             }
-            if ui.add_enabled(point_id.is_some() && context.x.is_finite() && context.y.is_finite(), egui::Button::new("Add point annotation here")).clicked() {
+            if ui
+                .add_enabled(
+                    point_id.is_some() && context.x.is_finite() && context.y.is_finite(),
+                    egui::Button::new("Add point annotation here"),
+                )
+                .clicked()
+            {
                 if let Some(id) = point_id {
                     self.workspace.annotations.push(Annotation::Point {
-                        mode: self.workspace.mode, curve: RangeRule::series_target(id),
-                        x: context.x, y: context.y, label: "Point".into(), color: ui::inspector::MARK_COLOR,
+                        mode: self.workspace.mode,
+                        curve: RangeRule::series_target(id),
+                        x: context.x,
+                        y: context.y,
+                        label: "Point".into(),
+                        color: ui::inspector::MARK_COLOR,
                     });
                 }
                 ui.close();
             }
-            if ui.add_enabled(self.chart.selection.is_some(), egui::Button::new("Add region from selection")).clicked() {
+            if ui
+                .add_enabled(
+                    self.chart.selection.is_some(),
+                    egui::Button::new("Add region from selection"),
+                )
+                .clicked()
+            {
                 if let Some([a, b]) = self.chart.selection {
-                    if let Some(region) = Annotation::region(self.workspace.mode, self.workspace.x_key.clone().unwrap_or_default(),
-                        a, b, "Selection".into(), ui::inspector::MARK_COLOR) {
+                    if let Some(region) = Annotation::region(
+                        self.workspace.mode,
+                        self.workspace.x_key.clone().unwrap_or_default(),
+                        a,
+                        b,
+                        "Selection".into(),
+                        ui::inspector::MARK_COLOR,
+                    ) {
                         self.workspace.annotations.push(region);
                     }
                 }
                 ui.close();
             }
-            if ui.add_enabled(pane.is_some() && context.y.is_finite(), egui::Button::new("Add reference line at this value")).clicked() {
+            if ui
+                .add_enabled(
+                    pane.is_some() && context.y.is_finite(),
+                    egui::Button::new("Add reference line at this value"),
+                )
+                .clicked()
+            {
                 if let Some(pane) = &pane {
                     self.workspace.annotations.push(Annotation::HLine {
-                        mode: self.workspace.mode, pane: pane.clone(), y: context.y,
-                        label: "Reference".into(), color: ui::inspector::MARK_COLOR,
+                        mode: self.workspace.mode,
+                        pane: pane.clone(),
+                        y: context.y,
+                        label: "Reference".into(),
+                        color: ui::inspector::MARK_COLOR,
                     });
                 }
                 ui.close();
             }
-            if ui.add_enabled(context.x.is_finite(), egui::Button::new("Add event marker here")).clicked() {
+            if ui
+                .add_enabled(
+                    context.x.is_finite(),
+                    egui::Button::new("Add event marker here"),
+                )
+                .clicked()
+            {
                 self.workspace.annotations.push(Annotation::VLine {
-                    mode: self.workspace.mode, x_axis: self.workspace.x_key.clone().unwrap_or_default(),
-                    x: context.x, label: "Event".into(), color: ui::inspector::MARK_COLOR,
+                    mode: self.workspace.mode,
+                    x_axis: self.workspace.x_key.clone().unwrap_or_default(),
+                    x: context.x,
+                    label: "Event".into(),
+                    color: ui::inspector::MARK_COLOR,
                 });
                 ui.close();
             }
             ui.separator();
-            if ui.add_enabled(self.chart.selection.is_some(), egui::Button::new("Zoom to selection")).clicked() {
+            if ui
+                .add_enabled(
+                    self.chart.selection.is_some(),
+                    egui::Button::new("Zoom to selection"),
+                )
+                .clicked()
+            {
                 if let Some([a, b]) = self.chart.selection {
                     let range = [a.min(b), a.max(b)];
                     if self.chart_options.link_x {
                         self.chart.x_view = Some(range);
                     } else {
                         for series in &self.workspace.series {
-                            self.chart.pane_x_views.insert(ui::chart_view::pane_id(&series.pane), range);
+                            self.chart
+                                .pane_x_views
+                                .insert(ui::chart_view::pane_id(&series.pane), range);
                         }
                     }
                 }
                 ui.close();
             }
-            if ui.button("Fit all").clicked() { self.chart.fit_all(); ui.close(); }
-            if ui.button("Fit Y in every pane").clicked() { self.chart.y_views.clear(); ui.close(); }
-            if ui.add_enabled(context.x.is_finite() && context.y.is_finite(), egui::Button::new("Copy X and Y"))
+            if ui.button("Fit all").clicked() {
+                self.chart.fit_all();
+                ui.close();
+            }
+            if ui.button("Fit Y in every pane").clicked() {
+                self.chart.y_views.clear();
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    context.x.is_finite() && context.y.is_finite(),
+                    egui::Button::new("Copy X and Y"),
+                )
                 .on_hover_text("Copy the position under the cursor as tab-separated text")
                 .clicked()
             {
-                let x = ui::chart_view::x_readout(&self.workspace, context.x, self.settings.precision);
+                let x =
+                    ui::chart_view::x_readout(&self.workspace, context.x, self.settings.precision);
                 let y = dv_chart::format::format_value(context.y, &unit, self.settings.precision);
                 ctx.copy_text(format!("{x}\t{y}"));
                 ui.close();
             }
             ui.separator();
-            if ui.button("Copy figure").clicked() { copy_figure = true; ui.close(); }
-            if ui.button("Export figure…").clicked() { self.dialog = Dialog::Export; ui.close(); }
+            if ui.button("Copy figure").clicked() {
+                copy_figure = true;
+                ui.close();
+            }
+            if ui.button("Export figure…").clicked() {
+                self.dialog = Dialog::Export;
+                ui.close();
+            }
         });
-        if rebuild { self.workspace.rebuild(); }
-        if copy_figure { self.run_action(ActionId::CopyFigure, ctx); }
+        if rebuild {
+            self.workspace.rebuild();
+        }
+        if copy_figure {
+            self.run_action(ActionId::CopyFigure, ctx);
+        }
     }
 
     fn command_palette(&mut self, ctx: &egui::Context) {
@@ -1357,7 +1529,9 @@ impl DatView {
                                         .min_col_width(190.0)
                                         .spacing([20.0, 5.0])
                                         .show(ui, |ui| {
-                                            for action in ACTIONS.iter().filter(|action| action.menu == menu) {
+                                            for action in
+                                                ACTIONS.iter().filter(|action| action.menu == menu)
+                                            {
                                                 if let Some(shortcut) = &action.shortcut {
                                                     ui.label(action.label);
                                                     ui.horizontal(|ui| {
@@ -1365,9 +1539,13 @@ impl DatView {
                                                         for key in shortcut.text(ctx).split('+') {
                                                             widgets::kbd_hint(ui, key);
                                                         }
-                                                        if let Some(alternate) = &action.alternate_shortcut {
+                                                        if let Some(alternate) =
+                                                            &action.alternate_shortcut
+                                                        {
                                                             ui.weak("or");
-                                                            for key in alternate.text(ctx).split('+') {
+                                                            for key in
+                                                                alternate.text(ctx).split('+')
+                                                            {
                                                                 widgets::kbd_hint(ui, key);
                                                             }
                                                         }
@@ -1498,21 +1676,37 @@ impl DatView {
                             ui.set_width(360.0);
                             ui.horizontal_top(|ui| {
                                 ui.label(
-                                    RichText::new(if toast.error { icons::WARNING_CIRCLE } else { icons::CHECK_CIRCLE })
-                                        .family(theme::icon_family())
-                                        .size(16.0)
-                                        .color(if toast.error { tokens.error } else { tokens.success }),
+                                    RichText::new(if toast.error {
+                                        icons::WARNING_CIRCLE
+                                    } else {
+                                        icons::CHECK_CIRCLE
+                                    })
+                                    .family(theme::icon_family())
+                                    .size(16.0)
+                                    .color(if toast.error {
+                                        tokens.error
+                                    } else {
+                                        tokens.success
+                                    }),
                                 );
                                 let text_width = if toast.action.is_some() { 220.0 } else { 280.0 };
                                 ui.allocate_ui_with_layout(
                                     egui::vec2(text_width, 0.0),
                                     Layout::top_down(Align::Min),
-                                    |ui| { ui.add(egui::Label::new(&toast.message).wrap()); },
+                                    |ui| {
+                                        ui.add(egui::Label::new(&toast.message).wrap());
+                                    },
                                 );
-                                if toast.action.is_some() && ui.button(RichText::new("Undo").color(tokens.accent)).clicked() {
+                                if toast.action.is_some()
+                                    && ui
+                                        .button(RichText::new("Undo").color(tokens.accent))
+                                        .clicked()
+                                {
                                     acted = Some(index);
                                 }
-                                if widgets::icon_button(ui, icons::CLOSE, "Dismiss notification").clicked() {
+                                if widgets::icon_button(ui, icons::CLOSE, "Dismiss notification")
+                                    .clicked()
+                                {
                                     dismissed = Some(index);
                                 }
                             });
@@ -1554,7 +1748,12 @@ impl eframe::App for DatView {
         let fields_appeared = self.fields.sync(&mut self.workspace);
         if fields_appeared
             && self.view == View::Chart
-            && self.workspace.tables.tabs.iter().all(|table| table.fileobject.is_none() || table.data.nrows() < 3)
+            && self
+                .workspace
+                .tables
+                .tabs
+                .iter()
+                .all(|table| table.fileobject.is_none() || table.data.nrows() < 3)
         {
             self.view = View::Fields;
         }
@@ -1592,7 +1791,8 @@ impl eframe::App for DatView {
                         self.view = View::Info;
                     }
                     if let Some(source) = result.export {
-                        self.data_export.open_source(&self.workspace, &self.chart, source);
+                        self.data_export
+                            .open_source(&self.workspace, &self.chart, source);
                     }
                     match result.formula {
                         Some(ui::sidebar::FormulaRequest::New) => self.formula.open_new(),
@@ -1651,7 +1851,14 @@ impl eframe::App for DatView {
                         .stroke(Stroke::new(1.0, tokens.border)),
                 )
                 .show(root, |ui| {
-                    if self.inspector.show(ui, &mut self.workspace, &mut self.chart, &self.settings, &self.chart_options, self.cursor) {
+                    if self.inspector.show(
+                        ui,
+                        &mut self.workspace,
+                        &mut self.chart,
+                        &self.settings,
+                        &self.chart_options,
+                        self.cursor,
+                    ) {
                         self.inspector_visible = false;
                     }
                 });

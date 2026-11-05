@@ -298,7 +298,11 @@ pub fn mann_with_options(
         format: "HAWC2 Turbulence box",
         frames,
         fields: None,
-        description: format!("Dimensions: {nx} × {ny} × {nz}\ny: {}\nz: {}", number_list(&y), number_list(&z)),
+        description: format!(
+            "Dimensions: {nx} × {ny} × {nz}\ny: {}\nz: {}",
+            number_list(&y),
+            number_list(&z)
+        ),
     }))
 }
 pub fn bmodes(path: &Path) -> Result<Arc<dyn FileObject>, IoError> {
@@ -345,5 +349,9 @@ pub fn bmodes(path: &Path) -> Result<Arc<dyn FileObject>, IoError> {
 
 /// `1.5, 2, 2.5` for reader notes.
 fn number_list(values: &[f64]) -> String {
-    values.iter().map(f64::to_string).collect::<Vec<_>>().join(", ")
+    values
+        .iter()
+        .map(f64::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }

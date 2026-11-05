@@ -74,13 +74,23 @@ fn split_ref(column: &Column, row: usize) -> Option<SplitRef<'_>> {
     match &column.data {
         ColumnData::Float(values) | ColumnData::DateTime(values) => {
             let value = *values.get(row)?;
-            Some(if value.is_nan() { SplitRef::Missing } else {
-                SplitRef::Number(if value == 0.0 { 0.0f64.to_bits() } else { value.to_bits() })
+            Some(if value.is_nan() {
+                SplitRef::Missing
+            } else {
+                SplitRef::Number(if value == 0.0 {
+                    0.0f64.to_bits()
+                } else {
+                    value.to_bits()
+                })
             })
         }
         ColumnData::Str(values) => {
             let value = values.get(row)?.trim();
-            Some(if value.is_empty() || value == "-" { SplitRef::Missing } else { SplitRef::Text(value) })
+            Some(if value.is_empty() || value == "-" {
+                SplitRef::Missing
+            } else {
+                SplitRef::Text(value)
+            })
         }
     }
 }
@@ -96,7 +106,10 @@ impl SplitValue {
     }
     fn label(&self, column: &str) -> String {
         match self {
-            Self::Number(bits) => format!("{column} {}", dv_chart::format::format_value(f64::from_bits(*bits), "", 12)),
+            Self::Number(bits) => format!(
+                "{column} {}",
+                dv_chart::format::format_value(f64::from_bits(*bits), "", 12)
+            ),
             Self::Text(value) => value.clone(),
             Self::Missing => "summary".into(),
         }
@@ -123,17 +136,32 @@ pub(crate) struct MergeParent {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) enum GeneratedRecipe {
-    Split { parent: String, column: String, occurrence: usize, value: SplitValue },
-    Merge { parents: Vec<MergeParent>, x_key: String },
-    Stack { parents: Vec<String>, common_only: bool },
-    Transpose { parent: String },
+    Split {
+        parent: String,
+        column: String,
+        occurrence: usize,
+        value: SplitValue,
+    },
+    Merge {
+        parents: Vec<MergeParent>,
+        x_key: String,
+    },
+    Stack {
+        parents: Vec<String>,
+        common_only: bool,
+    },
+    Transpose {
+        parent: String,
+    },
 }
 
 impl GeneratedRecipe {
     pub(crate) fn parent_keys(&self) -> Vec<&str> {
         match self {
             Self::Split { parent, .. } | Self::Transpose { parent } => vec![parent],
-            Self::Merge { parents, .. } => parents.iter().map(|parent| parent.key.as_str()).collect(),
+            Self::Merge { parents, .. } => {
+                parents.iter().map(|parent| parent.key.as_str()).collect()
+            }
             Self::Stack { parents, .. } => parents.iter().map(String::as_str).collect(),
         }
     }
@@ -141,16 +169,22 @@ impl GeneratedRecipe {
     pub(crate) fn relocate_parent(&mut self, old: &str, new: &str) {
         match self {
             Self::Split { parent, .. } | Self::Transpose { parent } => {
-                if parent == old { *parent = new.to_owned(); }
+                if parent == old {
+                    *parent = new.to_owned();
+                }
             }
             Self::Merge { parents, .. } => {
                 for parent in parents {
-                    if parent.key == old { parent.key = new.to_owned(); }
+                    if parent.key == old {
+                        parent.key = new.to_owned();
+                    }
                 }
             }
             Self::Stack { parents, .. } => {
                 for parent in parents {
-                    if parent == old { *parent = new.to_owned(); }
+                    if parent == old {
+                        *parent = new.to_owned();
+                    }
                 }
             }
         }
@@ -812,8 +846,14 @@ impl Workspace {
     pub(crate) fn sort_sources(&mut self) {
         let mut order: Vec<_> = (0..self.sources.len()).collect();
         order.sort_by_cached_key(|&index| self.sources[index].name.to_lowercase());
-        let mut sources: Vec<_> = std::mem::take(&mut self.sources).into_iter().map(Some).collect();
-        let mut tables: Vec<_> = std::mem::take(&mut self.tables.tabs).into_iter().map(Some).collect();
+        let mut sources: Vec<_> = std::mem::take(&mut self.sources)
+            .into_iter()
+            .map(Some)
+            .collect();
+        let mut tables: Vec<_> = std::mem::take(&mut self.tables.tabs)
+            .into_iter()
+            .map(Some)
+            .collect();
         for index in order {
             if let (Some(source), Some(table)) = (sources[index].take(), tables[index].take()) {
                 self.sources.push(source);
@@ -847,12 +887,21 @@ impl Workspace {
             if source.align_start || source.offset != 0.0 {
                 return None;
             }
-            let column = table.data.columns().iter().find(|column| clean_col(&column.name) == key)?;
+            let column = table
+                .data
+                .columns()
+                .iter()
+                .find(|column| clean_col(&column.name) == key)?;
             let values = match &column.data {
                 ColumnData::Float(values) | ColumnData::DateTime(values) => values,
                 ColumnData::Str(_) => return None,
             };
-            let (lo, hi) = values.iter().filter(|v| v.is_finite()).fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+            let (lo, hi) = values
+                .iter()
+                .filter(|v| v.is_finite())
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &v| {
+                    (lo.min(v), hi.max(v))
+                });
             if lo >= hi {
                 return None;
             }
@@ -862,14 +911,23 @@ impl Workspace {
             return None;
         }
         spans.sort_by(|a, b| a.1.total_cmp(&b.1));
-        spans.windows(2).all(|pair| pair[0].2 < pair[1].1).then(|| spans.iter().map(|span| span.0).collect())
+        spans
+            .windows(2)
+            .all(|pair| pair[0].2 < pair[1].1)
+            .then(|| spans.iter().map(|span| span.0).collect())
     }
 
     /// Merge active sources on the selected X axis. Numeric channels are
     /// interpolated; text channels hold their most recent value within a run.
     pub(crate) fn merge_sources(&mut self) -> Result<(), String> {
-        let key = self.x_key.clone().ok_or("Choose an X axis before merging.")?;
-        let active: Vec<_> = self.sources.iter().enumerate()
+        let key = self
+            .x_key
+            .clone()
+            .ok_or("Choose an X axis before merging.")?;
+        let active: Vec<_> = self
+            .sources
+            .iter()
+            .enumerate()
             .filter_map(|(index, source)| source.active.then_some(index))
             .collect();
         self.merge_selected(&active, &key)?;
@@ -883,7 +941,9 @@ impl Workspace {
             let mut selected = Vec::new();
             for column in merged.data.columns() {
                 let (label, _) = split_name_unit(&column.name);
-                let base = label.rsplit_once(" · ").map_or(label.as_str(), |(base, _)| base);
+                let base = label
+                    .rsplit_once(" · ")
+                    .map_or(label.as_str(), |(base, _)| base);
                 let key = clean_col(&column.name);
                 if self.selected.contains(&clean_col(base)) && !selected.contains(&key) {
                     selected.push(key);
@@ -901,11 +961,22 @@ impl Workspace {
         if active.len() < 2 {
             return Err("Select at least two sources to merge.".into());
         }
-        let parents = active.iter().map(|&index| {
-            let source = &self.sources[index];
-            MergeParent { key: source.stable_key(), name: source.name.clone(), align_start: source.align_start, offset: source.offset }
-        }).collect();
-        let names: Vec<&str> = active.iter().map(|&index| self.sources[index].name.as_str()).collect();
+        let parents = active
+            .iter()
+            .map(|&index| {
+                let source = &self.sources[index];
+                MergeParent {
+                    key: source.stable_key(),
+                    name: source.name.clone(),
+                    align_start: source.align_start,
+                    offset: source.offset,
+                }
+            })
+            .collect();
+        let names: Vec<&str> = active
+            .iter()
+            .map(|&index| self.sources[index].name.as_str())
+            .collect();
         let tags = distinguishing_names(&names);
         let mut numeric_tables = Vec::with_capacity(active.len());
         let mut x_indices = Vec::with_capacity(active.len());
@@ -919,8 +990,13 @@ impl Workspace {
                 Some(mask) => table.data.filter_rows(mask),
                 None => table.data.clone(),
             };
-            let x_index = frame.columns().iter().position(|column| clean_col(&column.name) == key)
-                .ok_or_else(|| format!("“{}” does not contain the selected X axis.", source.name))?;
+            let x_index = frame
+                .columns()
+                .iter()
+                .position(|column| clean_col(&column.name) == key)
+                .ok_or_else(|| {
+                    format!("“{}” does not contain the selected X axis.", source.name)
+                })?;
             let x_column = frame.column(x_index);
             clock_x.get_or_insert(x_column.is_datetime() && !source.align_start);
             let (values, unit) = match &x_column.data {
@@ -929,24 +1005,38 @@ impl Workspace {
                     (values, parse_unit(&unit))
                 }
                 ColumnData::DateTime(values) => (values, parse_unit("s")),
-                ColumnData::Str(_) => return Err(format!("The X axis in “{}” is not numeric.", source.name)),
+                ColumnData::Str(_) => {
+                    return Err(format!("The X axis in “{}” is not numeric.", source.name))
+                }
             };
             let target = reference_unit.get_or_insert_with(|| unit.clone());
             if unit.convert_value(0.0, target).is_none() {
                 return Err("The selected X axes have incompatible units.".into());
             }
             let start = if source.align_start {
-                values.iter().copied().find(|value| value.is_finite()).unwrap_or(0.0)
+                values
+                    .iter()
+                    .copied()
+                    .find(|value| value.is_finite())
+                    .unwrap_or(0.0)
             } else {
                 0.0
             };
-            let xs: Vec<f64> = values.iter()
-                .map(|&value| unit.convert_value(value + source.offset - start, target).unwrap_or(f64::NAN))
+            let xs: Vec<f64> = values
+                .iter()
+                .map(|&value| {
+                    unit.convert_value(value + source.offset - start, target)
+                        .unwrap_or(f64::NAN)
+                })
                 .collect();
-            if xs.is_empty() || xs.iter().any(|x| !x.is_finite())
+            if xs.is_empty()
+                || xs.iter().any(|x| !x.is_finite())
                 || xs.windows(2).any(|pair| pair[0] > pair[1])
             {
-                return Err(format!("The X axis in “{}” must be finite and sorted to merge.", source.name));
+                return Err(format!(
+                    "The X axis in “{}” must be finite and sorted to merge.",
+                    source.name
+                ));
             }
             let mut numbers = Vec::new();
             let mut strings = Vec::new();
@@ -981,7 +1071,11 @@ impl Workspace {
             }
             let data = DataFrame::from_columns(numbers).map_err(|error| error.to_string())?;
             let table = Table::from_df(data, &source.name);
-            let x_index = table.data.columns().iter().position(|column| clean_col(&column.name) == key)
+            let x_index = table
+                .data
+                .columns()
+                .iter()
+                .position(|column| clean_col(&column.name) == key)
                 .ok_or("The selected X axis could not be prepared for merging.")?;
             numeric_tables.push(table);
             x_indices.push(x_index);
@@ -993,12 +1087,18 @@ impl Workspace {
         // Absolute timestamps stay timestamps.
         if clock_x == Some(true) {
             let name = merged.column(x_indices[0]).name.clone();
-            merged.set(x_indices[0], Column::new(name, ColumnData::DateTime(merged_x.clone())))
+            merged
+                .set(
+                    x_indices[0],
+                    Column::new(name, ColumnData::DateTime(merged_x.clone())),
+                )
                 .map_err(|error| error.to_string())?;
         }
         for (xs, columns) in text_columns {
             for column in columns {
-                let ColumnData::Str(values) = column.data else { continue };
+                let ColumnData::Str(values) = column.data else {
+                    continue;
+                };
                 let mut selected = Vec::with_capacity(merged_x.len());
                 for &x in &merged_x {
                     let end = xs.partition_point(|&sample| sample <= x);
@@ -1008,22 +1108,35 @@ impl Workspace {
                         values[end - 1].clone()
                     });
                 }
-                merged.push(Column::new(column.name, ColumnData::Str(selected)))
+                merged
+                    .push(Column::new(column.name, ColumnData::Str(selected)))
                     .map_err(|error| error.to_string())?;
             }
         }
         self.add_generated_table(merged, &combined_name(&tags, "merged"));
-        let stage = self.pipeline.actions.iter().filter(|action| action.kind != ActionKind::PlotData).count();
+        let stage = self
+            .pipeline
+            .actions
+            .iter()
+            .filter(|action| action.kind != ActionKind::PlotData)
+            .count();
         if let Some(source) = self.sources.last_mut() {
-            source.recipe = Some(GeneratedRecipe::Merge { parents, x_key: key.to_owned() });
+            source.recipe = Some(GeneratedRecipe::Merge {
+                parents,
+                x_key: key.to_owned(),
+            });
             source.recipe_stage = stage;
         }
         Ok(())
     }
 
     pub(crate) fn stack_sources(&mut self, common_only: bool) -> Result<(), String> {
-        let indices: Vec<_> = self.sources.iter().enumerate()
-            .filter_map(|(index, source)| source.active.then_some(index)).collect();
+        let indices: Vec<_> = self
+            .sources
+            .iter()
+            .enumerate()
+            .filter_map(|(index, source)| source.active.then_some(index))
+            .collect();
         self.stack_selected(&indices, common_only)?;
         // The stacked source replaces its parents on the chart.
         for index in indices {
@@ -1036,23 +1149,44 @@ impl Workspace {
         if indices.len() < 2 {
             return Err("Select at least two sources to stack.".into());
         }
-        let parents = indices.iter().map(|&index| self.sources[index].stable_key()).collect();
-        let names: Vec<&str> = indices.iter().map(|&index| self.sources[index].name.as_str()).collect();
+        let parents = indices
+            .iter()
+            .map(|&index| self.sources[index].stable_key())
+            .collect();
+        let names: Vec<&str> = indices
+            .iter()
+            .map(|&index| self.sources[index].name.as_str())
+            .collect();
         let name = combined_name(&distinguishing_names(&names), "stacked");
         let (_, frame) = self.tables.vstack(Some(indices), common_only);
         self.tables.tabs.pop();
         self.add_generated_table(frame, &name);
-        let stage = self.pipeline.actions.iter().filter(|action| action.kind != ActionKind::PlotData).count();
+        let stage = self
+            .pipeline
+            .actions
+            .iter()
+            .filter(|action| action.kind != ActionKind::PlotData)
+            .count();
         if let Some(source) = self.sources.last_mut() {
-            source.recipe = Some(GeneratedRecipe::Stack { parents, common_only });
+            source.recipe = Some(GeneratedRecipe::Stack {
+                parents,
+                common_only,
+            });
             source.recipe_stage = stage;
         }
         Ok(())
     }
 
     pub(crate) fn transpose_source(&mut self, index: usize) -> Result<(), String> {
-        let source = self.sources.get(index).ok_or("Source is no longer available.")?;
-        let table = self.tables.tabs.get(index).ok_or("Source is no longer available.")?;
+        let source = self
+            .sources
+            .get(index)
+            .ok_or("Source is no longer available.")?;
+        let table = self
+            .tables
+            .tabs
+            .get(index)
+            .ok_or("Source is no longer available.")?;
         let name = format!("{} · transposed", source.name);
         let parent = source.stable_key();
         let data = match &table.mask {
@@ -1062,7 +1196,12 @@ impl Workspace {
         let mut transposed = Table::from_df(data, &name);
         transposed.transpose();
         self.add_generated_table(transposed.data, &name);
-        let stage = self.pipeline.actions.iter().filter(|action| action.kind != ActionKind::PlotData).count();
+        let stage = self
+            .pipeline
+            .actions
+            .iter()
+            .filter(|action| action.kind != ActionKind::PlotData)
+            .count();
         if let Some(source) = self.sources.last_mut() {
             source.recipe = Some(GeneratedRecipe::Transpose { parent });
             source.recipe_stage = stage;
@@ -1072,18 +1211,39 @@ impl Workspace {
 
     /// Create one source for each value, retaining the original source for undo.
     pub(crate) fn split_source(&mut self, index: usize, column_index: usize) -> Result<(), String> {
-        let source = self.sources.get(index).ok_or("Source is no longer available.")?.clone();
-        let table = self.tables.tabs.get(index).ok_or("Source is no longer available.")?;
-        let column = table.data.columns().get(column_index).ok_or("Column is no longer available.")?;
+        let source = self
+            .sources
+            .get(index)
+            .ok_or("Source is no longer available.")?
+            .clone();
+        let table = self
+            .tables
+            .tabs
+            .get(index)
+            .ok_or("Source is no longer available.")?;
+        let column = table
+            .data
+            .columns()
+            .get(column_index)
+            .ok_or("Column is no longer available.")?;
         let column_name = column.name.clone();
-        let occurrence = table.data.columns()[..column_index].iter().filter(|other| other.name == column_name).count();
+        let occurrence = table.data.columns()[..column_index]
+            .iter()
+            .filter(|other| other.name == column_name)
+            .count();
         let mut lookup = HashMap::new();
         let mut groups: Vec<(SplitValue, Vec<usize>)> = Vec::new();
         for row in 0..table.nrows() {
-            if table.mask.as_ref().is_some_and(|mask| !mask.get(row).copied().unwrap_or(false)) {
+            if table
+                .mask
+                .as_ref()
+                .is_some_and(|mask| !mask.get(row).copied().unwrap_or(false))
+            {
                 continue;
             }
-            let Some(value) = split_ref(column, row) else { continue };
+            let Some(value) = split_ref(column, row) else {
+                continue;
+            };
             let group = if let Some(&group) = lookup.get(&value) {
                 group
             } else {
@@ -1101,15 +1261,28 @@ impl Workspace {
             return Err("There are no rows to split.".into());
         }
         let parent = source.stable_key();
-        let outputs: Vec<_> = groups.into_iter().map(|(value, rows)| {
-            let mut frame = table.data.take_rows(&rows);
-            frame.remove(column_index);
-            drop_empty_columns(&mut frame);
-            let name = format!("{} · {}", source.name, value.label(&column_name));
-            let recipe = GeneratedRecipe::Split { parent: parent.clone(), column: column_name.clone(), occurrence, value };
-            (frame, name, recipe)
-        }).collect();
-        let stage = self.pipeline.actions.iter().filter(|action| action.kind != ActionKind::PlotData).count();
+        let outputs: Vec<_> = groups
+            .into_iter()
+            .map(|(value, rows)| {
+                let mut frame = table.data.take_rows(&rows);
+                frame.remove(column_index);
+                drop_empty_columns(&mut frame);
+                let name = format!("{} · {}", source.name, value.label(&column_name));
+                let recipe = GeneratedRecipe::Split {
+                    parent: parent.clone(),
+                    column: column_name.clone(),
+                    occurrence,
+                    value,
+                };
+                (frame, name, recipe)
+            })
+            .collect();
+        let stage = self
+            .pipeline
+            .actions
+            .iter()
+            .filter(|action| action.kind != ActionKind::PlotData)
+            .count();
         for (frame, name, recipe) in outputs {
             let new_index = self.push_generated_table(frame, &name);
             self.sources[new_index].offset = source.offset;
@@ -1124,16 +1297,25 @@ impl Workspace {
 
     /// Replay a saved operation without changing the saved parents' options.
     pub(crate) fn regenerate(&mut self, recipe: &GeneratedRecipe) -> Result<usize, String> {
-        let indices: Vec<_> = recipe.parent_keys().iter().map(|key| {
-            self.sources.iter().position(|source| source.stable_key() == *key)
-                .ok_or_else(|| format!("A parent source is unavailable: {key}"))
-        }).collect::<Result<_, _>>()?;
+        let indices: Vec<_> = recipe
+            .parent_keys()
+            .iter()
+            .map(|key| {
+                self.sources
+                    .iter()
+                    .position(|source| source.stable_key() == *key)
+                    .ok_or_else(|| format!("A parent source is unavailable: {key}"))
+            })
+            .collect::<Result<_, _>>()?;
         match recipe {
             GeneratedRecipe::Merge { parents, x_key } => {
-                let saved: Vec<_> = indices.iter().map(|&index| {
-                    let source = &self.sources[index];
-                    (source.name.clone(), source.align_start, source.offset)
-                }).collect();
+                let saved: Vec<_> = indices
+                    .iter()
+                    .map(|&index| {
+                        let source = &self.sources[index];
+                        (source.name.clone(), source.align_start, source.offset)
+                    })
+                    .collect();
                 for (&index, parent) in indices.iter().zip(parents) {
                     let source = &mut self.sources[index];
                     source.name = parent.name.clone();
@@ -1149,21 +1331,42 @@ impl Workspace {
                 }
                 result?;
             }
-            GeneratedRecipe::Stack { common_only, .. } => self.stack_selected(&indices, *common_only)?,
+            GeneratedRecipe::Stack { common_only, .. } => {
+                self.stack_selected(&indices, *common_only)?
+            }
             GeneratedRecipe::Transpose { .. } => self.transpose_source(indices[0])?,
-            GeneratedRecipe::Split { column, occurrence, value, .. } => {
+            GeneratedRecipe::Split {
+                column,
+                occurrence,
+                value,
+                ..
+            } => {
                 let index = indices[0];
                 let table = &self.tables.tabs[index];
-                let column_index = table.data.columns().iter().enumerate()
+                let column_index = table
+                    .data
+                    .columns()
+                    .iter()
+                    .enumerate()
                     .filter(|(_, candidate)| candidate.name == *column)
-                    .nth(*occurrence).map(|(index, _)| index)
+                    .nth(*occurrence)
+                    .map(|(index, _)| index)
                     .ok_or_else(|| format!("The split column “{column}” is unavailable."))?;
-                let selected: Vec<_> = (0..table.nrows()).filter(|&row| {
-                    table.mask.as_ref().is_none_or(|mask| mask.get(row).copied().unwrap_or(false))
-                        && split_ref(table.data.column(column_index), row).is_some_and(|item| value.matches(item))
-                }).collect();
+                let selected: Vec<_> = (0..table.nrows())
+                    .filter(|&row| {
+                        table
+                            .mask
+                            .as_ref()
+                            .is_none_or(|mask| mask.get(row).copied().unwrap_or(false))
+                            && split_ref(table.data.column(column_index), row)
+                                .is_some_and(|item| value.matches(item))
+                    })
+                    .collect();
                 if selected.is_empty() {
-                    return Err(format!("The split value “{}” is unavailable.", value.label(column)));
+                    return Err(format!(
+                        "The split value “{}” is unavailable.",
+                        value.label(column)
+                    ));
                 }
                 let mut frame = table.data.take_rows(&selected);
                 frame.remove(column_index);
@@ -1184,7 +1387,9 @@ impl Workspace {
     }
 
     fn push_generated_table(&mut self, df: DataFrame, name: &str) -> usize {
-        let ordinal = self.sources.iter()
+        let ordinal = self
+            .sources
+            .iter()
             .filter(|source| source.path.as_os_str().is_empty())
             .map(|source| source.frame)
             .max()
@@ -1323,13 +1528,22 @@ impl Workspace {
     /// Short labels telling the active sources apart, indexed like `sources`.
     /// Inactive sources keep their file name.
     pub(crate) fn source_tags(&self) -> Vec<String> {
-        let active: Vec<&str> = self.sources.iter()
+        let active: Vec<&str> = self
+            .sources
+            .iter()
             .filter(|source| source.active)
             .map(|source| source.name.as_str())
             .collect();
         let mut tags = distinguishing_names(&active).into_iter();
-        self.sources.iter()
-            .map(|source| if source.active { tags.next().unwrap_or_default() } else { source.name.clone() })
+        self.sources
+            .iter()
+            .map(|source| {
+                if source.active {
+                    tags.next().unwrap_or_default()
+                } else {
+                    source.name.clone()
+                }
+            })
             .collect()
     }
 }
@@ -1350,8 +1564,12 @@ fn combined_name(tags: &[String], operation: &str) -> String {
 fn drop_empty_columns(frame: &mut DataFrame) {
     for index in (0..frame.columns().len()).rev() {
         let empty = match &frame.columns()[index].data {
-            ColumnData::Float(values) | ColumnData::DateTime(values) => !values.iter().any(|v| v.is_finite()),
-            ColumnData::Str(values) => values.iter().all(|v| v.trim().is_empty() || v.trim() == "-"),
+            ColumnData::Float(values) | ColumnData::DateTime(values) => {
+                !values.iter().any(|v| v.is_finite())
+            }
+            ColumnData::Str(values) => values
+                .iter()
+                .all(|v| v.trim().is_empty() || v.trim() == "-"),
         };
         if empty && frame.columns().len() > 1 {
             frame.remove(index);
@@ -1367,10 +1585,13 @@ fn drop_empty_columns(frame: &mut DataFrame) {
 pub(crate) fn distinguishing_names(names: &[&str]) -> Vec<String> {
     // Only a short alphanumeric ending is a file extension; split sources are
     // named like `log.csv · index 0`, which has none.
-    let stems: Vec<&str> = names.iter()
+    let stems: Vec<&str> = names
+        .iter()
         .map(|name| match name.rsplit_once('.') {
             Some((stem, extension))
-                if !stem.is_empty() && (1..=5).contains(&extension.len()) && extension.chars().all(|c| c.is_ascii_alphanumeric()) =>
+                if !stem.is_empty()
+                    && (1..=5).contains(&extension.len())
+                    && extension.chars().all(|c| c.is_ascii_alphanumeric()) =>
             {
                 stem
             }
@@ -1386,27 +1607,51 @@ pub(crate) fn distinguishing_names(names: &[&str]) -> Vec<String> {
     let mut prefix = first.len();
     let mut suffix = first.len();
     for stem in &stems[1..] {
-        prefix = prefix.min(first.char_indices().zip(stem.chars())
-            .find(|((_, a), b)| a != b)
-            .map_or(first.len().min(stem.len()), |((index, _), _)| index));
-        suffix = suffix.min(first.chars().rev().zip(stem.chars().rev())
-            .take_while(|(a, b)| a == b)
-            .map(|(a, _)| a.len_utf8())
-            .sum());
+        prefix = prefix.min(
+            first
+                .char_indices()
+                .zip(stem.chars())
+                .find(|((_, a), b)| a != b)
+                .map_or(first.len().min(stem.len()), |((index, _), _)| index),
+        );
+        suffix = suffix.min(
+            first
+                .chars()
+                .rev()
+                .zip(stem.chars().rev())
+                .take_while(|(a, b)| a == b)
+                .map(|(a, _)| a.len_utf8())
+                .sum(),
+        );
     }
     // Back off to the last separator inside the shared part.
-    let mut prefix = first[..prefix].rfind(separator).map_or(0, |index| index + 1);
-    let suffix = first[first.len() - suffix..].find(separator).map_or(0, |index| suffix - index);
+    let mut prefix = first[..prefix]
+        .rfind(separator)
+        .map_or(0, |index| index + 1);
+    let suffix = first[first.len() - suffix..]
+        .find(separator)
+        .map_or(0, |index| suffix - index);
     let cut = |prefix: usize| -> Vec<String> {
-        stems.iter()
+        stems
+            .iter()
             .map(|stem| {
-                let end = stem.len().saturating_sub(suffix).max(prefix.min(stem.len()));
-                stem.get(prefix.min(stem.len())..end).unwrap_or(stem).trim_matches(separator).to_owned()
+                let end = stem
+                    .len()
+                    .saturating_sub(suffix)
+                    .max(prefix.min(stem.len()));
+                stem.get(prefix.min(stem.len())..end)
+                    .unwrap_or(stem)
+                    .trim_matches(separator)
+                    .to_owned()
             })
             .collect()
     };
     let mut tags = cut(prefix);
-    if prefix > 0 && tags.iter().all(|tag| !tag.is_empty() && tag.chars().all(|c| c.is_ascii_digit())) {
+    if prefix > 0
+        && tags
+            .iter()
+            .all(|tag| !tag.is_empty() && tag.chars().all(|c| c.is_ascii_digit()))
+    {
         // Keep the word that says what the number counts.
         let shared = first[..prefix].trim_end_matches(separator);
         prefix = shared.rfind(separator).map_or(0, |index| index + 1);
@@ -1438,14 +1683,23 @@ mod tests {
             distinguishing_names(&["cpu-benchmark-eco.csv", "cpu-benchmark-performance.csv"]),
             ["eco", "performance"]
         );
-        assert_eq!(distinguishing_names(&["hwinfo_run1.csv", "hwinfo_run2.csv"]), ["run1", "run2"]);
+        assert_eq!(
+            distinguishing_names(&["hwinfo_run1.csv", "hwinfo_run2.csv"]),
+            ["run1", "run2"]
+        );
         assert_eq!(
             distinguishing_names(&["log 12-40 cpu.csv", "log 13-10 cpu.csv"]),
             ["12-40", "13-10"]
         );
         // Identical stems (same file name in two formats) stay whole.
-        assert_eq!(distinguishing_names(&["run.csv", "run.hml"]), ["run.csv", "run.hml"]);
-        assert_eq!(distinguishing_names(&["power.csv", "power-2.csv"]), ["power", "power-2"]);
+        assert_eq!(
+            distinguishing_names(&["run.csv", "run.hml"]),
+            ["run.csv", "run.hml"]
+        );
+        assert_eq!(
+            distinguishing_names(&["power.csv", "power-2.csv"]),
+            ["power", "power-2"]
+        );
         assert_eq!(distinguishing_names(&["only.csv"]), ["only"]);
         // Split sources: numbers keep the word that names them.
         assert_eq!(
@@ -1453,7 +1707,10 @@ mod tests {
             ["index 0", "index 1"]
         );
         assert_eq!(
-            distinguishing_names(&["gpu.csv · Synthetic RTX 4090", "gpu.csv · Synthetic RTX 3060"]),
+            distinguishing_names(&[
+                "gpu.csv · Synthetic RTX 4090",
+                "gpu.csv · Synthetic RTX 3060"
+            ]),
             ["RTX 4090", "RTX 3060"]
         );
     }
@@ -1568,7 +1825,11 @@ mod tests {
     fn aligning_active_sources_clears_offsets_and_preserves_identity() {
         let mut w = Workspace::new(false);
         for name in ["First", "Second", "Hidden"] {
-            let df = DataFrame::from_floats(["Time [s]", "Power [W]"], vec![vec![10.0, 11.0], vec![1.0, 2.0]]).expect("frame");
+            let df = DataFrame::from_floats(
+                ["Time [s]", "Power [W]"],
+                vec![vec![10.0, 11.0], vec![1.0, 2.0]],
+            )
+            .expect("frame");
             w.add_generated_table(df, name);
         }
         let original_key = w.sources[0].stable_key();
@@ -1585,7 +1846,10 @@ mod tests {
         assert_eq!(w.sources[2].offset, 7.0);
         assert!(!w.align_all_starts());
         assert_eq!(w.sources[0].stable_key(), original_key);
-        assert_eq!(crate::series::series_id(&w.sources[0], "power"), original_id);
+        assert_eq!(
+            crate::series::series_id(&w.sources[0], "power"),
+            original_id
+        );
     }
 
     #[test]
@@ -1594,12 +1858,26 @@ mod tests {
             DataFrame::from_columns(vec![
                 Column::float("Power [W]", ys),
                 Column::float("Time [s]", xs),
-                Column::new("State", ColumnData::Str(states.iter().map(|s| (*s).to_owned()).collect())),
-            ]).expect("frame")
+                Column::new(
+                    "State",
+                    ColumnData::Str(states.iter().map(|s| (*s).to_owned()).collect()),
+                ),
+            ])
+            .expect("frame")
         }
         let mut w = Workspace::new(false);
-        w.add_generated_table(frame(vec![10.0, 12.0], vec![0.0, 20.0], &["idle", "load"]), "Eco");
-        w.add_generated_table(frame(vec![100.0, 101.0, 102.0], vec![100.0, 110.0, 120.0], &["a", "b", "c"]), "Performance");
+        w.add_generated_table(
+            frame(vec![10.0, 12.0], vec![0.0, 20.0], &["idle", "load"]),
+            "Eco",
+        );
+        w.add_generated_table(
+            frame(
+                vec![100.0, 101.0, 102.0],
+                vec![100.0, 110.0, 120.0],
+                &["a", "b", "c"],
+            ),
+            "Performance",
+        );
         w.set_x(clean_col("Time [s]"));
         w.align_all_starts();
         w.merge_sources().expect("merge");
@@ -1609,7 +1887,10 @@ mod tests {
         let eco = merged.find("Power · Eco [W]").expect("Eco power");
         assert_eq!(merged.f64_col(eco).as_ref(), &[0.0, 10.0, 20.0]);
         let state = merged.find("State · Eco").expect("Eco state");
-        assert_eq!(merged.column(state).data, ColumnData::Str(vec!["idle".into(), "idle".into(), "load".into()]));
+        assert_eq!(
+            merged.column(state).data,
+            ColumnData::Str(vec!["idle".into(), "idle".into(), "load".into()])
+        );
         assert_eq!(w.sources[2].name, "Eco + Performance (merged)");
         // The merged source replaces its parents on the chart.
         assert!(!w.sources[0].active && !w.sources[1].active && w.sources[2].active);
@@ -1618,8 +1899,15 @@ mod tests {
     #[test]
     fn stacking_common_columns_and_reordering_keep_sources_paired() {
         let mut w = Workspace::new(false);
-        w.add_generated_table(DataFrame::from_floats(["Time [s]", "A"], vec![vec![0.0, 1.0], vec![1.0, 2.0]]).expect("frame"), "Z");
-        w.add_generated_table(DataFrame::from_floats(["Time [s]", "B"], vec![vec![2.0], vec![3.0]]).expect("frame"), "A");
+        w.add_generated_table(
+            DataFrame::from_floats(["Time [s]", "A"], vec![vec![0.0, 1.0], vec![1.0, 2.0]])
+                .expect("frame"),
+            "Z",
+        );
+        w.add_generated_table(
+            DataFrame::from_floats(["Time [s]", "B"], vec![vec![2.0], vec![3.0]]).expect("frame"),
+            "A",
+        );
         let first_id = w.tables.tabs[0].identity();
         w.sort_sources();
         assert_eq!(w.sources[0].name, "A");

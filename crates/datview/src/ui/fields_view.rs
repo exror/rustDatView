@@ -271,7 +271,9 @@ impl FieldsView {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.menu_button("Export", |ui| {
                     let field = &self.fields[self.index].1;
-                    let stem: String = field.name.chars()
+                    let stem: String = field
+                        .name
+                        .chars()
                         .map(|c| if c.is_alphanumeric() { c } else { '-' })
                         .collect();
                     if ui.button("Matrix as CSV…").clicked() {
@@ -287,7 +289,8 @@ impl FieldsView {
                             });
                         }
                     }
-                    if ui.add_enabled(self.image.is_some(), egui::Button::new("Image as PNG…"))
+                    if ui
+                        .add_enabled(self.image.is_some(), egui::Button::new("Image as PNG…"))
                         .on_hover_text("One pixel per cell, in the current color map and range")
                         .clicked()
                     {
@@ -431,9 +434,18 @@ impl FieldsView {
             };
             if let Some((i, j)) = cell {
                 let rows = [
-                    (field.sx.as_str(), dv_chart::format::format_value(field.x[i], "", 5)),
-                    (field.sy.as_str(), dv_chart::format::format_value(field.y[j], "", 5)),
-                    (field.name.as_str(), dv_chart::format::format_value(field.value(i, j), "", 5)),
+                    (
+                        field.sx.as_str(),
+                        dv_chart::format::format_value(field.x[i], "", 5),
+                    ),
+                    (
+                        field.sy.as_str(),
+                        dv_chart::format::format_value(field.y[j], "", 5),
+                    ),
+                    (
+                        field.name.as_str(),
+                        dv_chart::format::format_value(field.value(i, j), "", 5),
+                    ),
                 ];
                 hover_card(ui, pos, outer, &rows);
             }
@@ -447,21 +459,52 @@ fn hover_card(ui: &egui::Ui, pos: Pos2, area: Rect, rows: &[(&str, String)]) {
     let tokens = super::theme::Tokens::for_dark(super::theme::is_dark(ui.ctx()));
     let painter = ui.painter();
     let font = FontId::proportional(12.5);
-    let layout = |text: &str, color: Color32| painter.layout_no_wrap(text.to_owned(), font.clone(), color);
-    let labels: Vec<_> = rows.iter().map(|(label, _)| layout(label, tokens.text_secondary)).collect();
-    let values: Vec<_> = rows.iter().map(|(_, value)| layout(value, tokens.text)).collect();
+    let layout =
+        |text: &str, color: Color32| painter.layout_no_wrap(text.to_owned(), font.clone(), color);
+    let labels: Vec<_> = rows
+        .iter()
+        .map(|(label, _)| layout(label, tokens.text_secondary))
+        .collect();
+    let values: Vec<_> = rows
+        .iter()
+        .map(|(_, value)| layout(value, tokens.text))
+        .collect();
     let label_width = labels.iter().map(|g| g.size().x).fold(0.0, f32::max);
     let value_width = values.iter().map(|g| g.size().x).fold(0.0, f32::max);
     let line = 19.0;
-    let size = Vec2::new(label_width + value_width + 34.0, rows.len() as f32 * line + 12.0);
-    let x = if pos.x + 16.0 + size.x < area.right() { pos.x + 16.0 } else { pos.x - 16.0 - size.x };
+    let size = Vec2::new(
+        label_width + value_width + 34.0,
+        rows.len() as f32 * line + 12.0,
+    );
+    let x = if pos.x + 16.0 + size.x < area.right() {
+        pos.x + 16.0
+    } else {
+        pos.x - 16.0 - size.x
+    };
     let y = (pos.y - size.y * 0.5).clamp(area.top(), (area.bottom() - size.y).max(area.top()));
     let card = Rect::from_min_size(Pos2::new(x, y), size);
-    painter.rect(card, 7.0, tokens.raised, Stroke::new(1.0, tokens.border_strong), egui::StrokeKind::Inside);
+    painter.rect(
+        card,
+        7.0,
+        tokens.raised,
+        Stroke::new(1.0, tokens.border_strong),
+        egui::StrokeKind::Inside,
+    );
     for (index, (label, value)) in labels.into_iter().zip(values).enumerate() {
         let cy = card.top() + 6.0 + line * (index as f32 + 0.5);
-        painter.galley(Pos2::new(card.left() + 10.0, cy - label.size().y * 0.5), label, tokens.text_secondary);
-        painter.galley(Pos2::new(card.right() - 10.0 - value.size().x, cy - value.size().y * 0.5), value, tokens.text);
+        painter.galley(
+            Pos2::new(card.left() + 10.0, cy - label.size().y * 0.5),
+            label,
+            tokens.text_secondary,
+        );
+        painter.galley(
+            Pos2::new(
+                card.right() - 10.0 - value.size().x,
+                cy - value.size().y * 0.5,
+            ),
+            value,
+            tokens.text,
+        );
     }
 }
 

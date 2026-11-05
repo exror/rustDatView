@@ -296,11 +296,14 @@ fn recent_button(ui: &mut egui::Ui, item: &RecentItem) -> (bool, bool) {
                     let clicked = ui
                         .add_enabled(
                             item.available,
-                            egui::Button::new(
-                                RichText::new(&item.name).strong().color(
-                                    if item.available { tokens.text } else { tokens.text_muted },
-                                ),
-                            ).frame(false),
+                            egui::Button::new(RichText::new(&item.name).strong().color(
+                                if item.available {
+                                    tokens.text
+                                } else {
+                                    tokens.text_muted
+                                },
+                            ))
+                            .frame(false),
                         )
                         .on_hover_text(&item.display_path)
                         .clicked();

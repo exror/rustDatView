@@ -198,12 +198,24 @@ impl AnalysisWindow {
                     None
                 }
                 Tool::Report => {
-                    let key = (series.id, series.generation, range.map(|[a, b]| [a.to_bits(), b.to_bits()]));
-                    if self.report.as_ref().is_none_or(|(cached, _)| *cached != key) {
+                    let key = (
+                        series.id,
+                        series.generation,
+                        range.map(|[a, b]| [a.to_bits(), b.to_bits()]),
+                    );
+                    if self
+                        .report
+                        .as_ref()
+                        .is_none_or(|(cached, _)| *cached != key)
+                    {
                         let summary = summarize(&series.x, &series.y, range);
-                        self.report = Some((key, report_rows(&summary, &series.unit, series.datetime)));
+                        self.report =
+                            Some((key, report_rows(&summary, &series.unit, series.datetime)));
                     }
-                    let rows = self.report.as_ref().map_or(&[][..], |(_, rows)| rows.as_slice());
+                    let rows = self
+                        .report
+                        .as_ref()
+                        .map_or(&[][..], |(_, rows)| rows.as_slice());
                     report_ui(ui, &series.label, rows)
                 }
             };
@@ -779,8 +791,20 @@ fn report_rows(s: &SignalSummary, unit: &str, datetime: bool) -> Vec<(&'static s
     let v = |value: f64| format_value(value, unit, 6);
     let n = |value: f64| format_value(value, "", 6);
     // Datetime X is epoch seconds: positions read as clock times, spans as durations.
-    let at = |value: f64| if datetime { format_time(value, 0.001) } else { n(value) };
-    let span = |value: f64| if datetime { format_duration(value, 0.001) } else { n(value) };
+    let at = |value: f64| {
+        if datetime {
+            format_time(value, 0.001)
+        } else {
+            n(value)
+        }
+    };
+    let span = |value: f64| {
+        if datetime {
+            format_duration(value, 0.001)
+        } else {
+            n(value)
+        }
+    };
     let mut rows = vec![
         ("Samples", format_value(s.n as f64, "", 15)),
         ("Minimum", v(s.min)),

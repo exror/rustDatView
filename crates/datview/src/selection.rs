@@ -33,7 +33,11 @@ pub(crate) fn is_index(name: &str) -> bool {
 
 /// Lowercase letters and digits only: "Time_Of_Day_Seconds" → "timeofdayseconds".
 fn compact(name: &str) -> String {
-    no_unit(name).chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect()
+    no_unit(name)
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
 }
 
 fn has_time_unit(name: &str) -> bool {
@@ -62,7 +66,9 @@ fn time_priority(name: &str) -> Option<u8> {
 
 /// Finite values never decrease (repeated values are fine: interleaved rows).
 fn non_decreasing(column: &Column) -> bool {
-    let ColumnData::Float(values) = &column.data else { return column.is_datetime() };
+    let ColumnData::Float(values) = &column.data else {
+        return column.is_datetime();
+    };
     let mut previous = f64::NEG_INFINITY;
     let mut finite = 0usize;
     for &value in values.iter().filter(|v| v.is_finite()) {
@@ -82,7 +88,9 @@ fn identifier_like(column: &Column) -> bool {
     if !split_name_unit(&column.name).1.trim().is_empty() {
         return false;
     }
-    let Some(values) = column.floats() else { return false };
+    let Some(values) = column.floats() else {
+        return false;
+    };
     let mut distinct = std::collections::BTreeSet::new();
     for &value in values.iter().filter(|v| v.is_finite()) {
         if value.fract() != 0.0 {
@@ -152,7 +160,9 @@ fn counter_like(column: &Column) -> bool {
     if !split_name_unit(&column.name).1.trim().is_empty() {
         return false;
     }
-    let Some(values) = column.floats() else { return false };
+    let Some(values) = column.floats() else {
+        return false;
+    };
     values.len() > 2 && values.windows(2).all(|pair| pair[1] - pair[0] == 1.0)
 }
 
@@ -235,7 +245,9 @@ pub(crate) fn default_ys(table: &Table, x: usize) -> Vec<usize> {
     let varying = |column: &Column| {
         column.floats().is_some_and(|values| {
             let mut finite = values.iter().copied().filter(|v| v.is_finite());
-            finite.next().is_some_and(|first| finite.any(|v| v != first))
+            finite
+                .next()
+                .is_some_and(|first| finite.any(|v| v != first))
         })
     };
     let mut candidates: Vec<_> = usable
@@ -251,7 +263,10 @@ pub(crate) fn default_ys(table: &Table, x: usize) -> Vec<usize> {
         })
         .collect();
     candidates.sort_by_key(|(rank, secondary, index, _)| (*rank, *secondary, *index));
-    let candidates: Vec<_> = candidates.into_iter().map(|(rank, _, index, family)| (rank, index, family)).collect();
+    let candidates: Vec<_> = candidates
+        .into_iter()
+        .map(|(rank, _, index, family)| (rank, index, family))
+        .collect();
     let mut picks: Vec<usize> = Vec::new();
     let mut families = Vec::new();
     for (rank, index, family) in &candidates {
@@ -325,21 +340,39 @@ mod tests {
         assert_eq!(default_ys(&t, default_x(&t)), vec![3, 5, 7]);
     }
     fn frame(columns: &[(&str, &[f64])]) -> Table {
-        let df = DataFrame::from_floats(columns.iter().map(|(name, _)| *name), columns.iter().map(|(_, v)| v.to_vec()).collect()).unwrap();
+        let df = DataFrame::from_floats(
+            columns.iter().map(|(name, _)| *name),
+            columns.iter().map(|(_, v)| v.to_vec()).collect(),
+        )
+        .unwrap();
         Table::from_df(df, "test")
     }
     #[test]
     fn recognizes_logger_and_localized_time_axes_but_not_unordered_ones() {
         // PresentMon: the frame interval has a time unit but is not an axis.
-        let t = frame(&[("Dropped", &[0., 0., 1.]), ("TimeInSeconds", &[0.01, 0.02, 0.03]), ("msBetweenPresents [ms]", &[8., 9., 7.])]);
+        let t = frame(&[
+            ("Dropped", &[0., 0., 1.]),
+            ("TimeInSeconds", &[0.01, 0.02, 0.03]),
+            ("msBetweenPresents [ms]", &[8., 9., 7.]),
+        ]);
         assert_eq!(default_x(&t), 2);
         // Power analyzer (German), scope exports and Joulescope.
-        for name in ["Zeit [s]", "X [s]", "x-axis [s]", "#time", "Time_Of_Day_Seconds"] {
+        for name in [
+            "Zeit [s]",
+            "X [s]",
+            "x-axis [s]",
+            "#time",
+            "Time_Of_Day_Seconds",
+        ] {
             let t = frame(&[("Value [V]", &[3., 1., 2.]), (name, &[0., 1., 2.])]);
             assert_eq!(default_x(&t), 2, "{name}");
         }
         // A time-named column that goes backwards, or carries a non-time unit, is data.
-        let t = frame(&[("Time [s]", &[2., 1., 0.]), ("Time [°C]", &[0., 1., 2.]), ("Elapsed [ms]", &[0., 5., 10.])]);
+        let t = frame(&[
+            ("Time [s]", &[2., 1., 0.]),
+            ("Time [°C]", &[0., 1., 2.]),
+            ("Elapsed [ms]", &[0., 5., 10.]),
+        ]);
         assert_eq!(default_x(&t), 3);
     }
     #[test]
