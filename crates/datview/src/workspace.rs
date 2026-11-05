@@ -868,7 +868,29 @@ impl Workspace {
         let active: Vec<_> = self.sources.iter().enumerate()
             .filter_map(|(index, source)| source.active.then_some(index))
             .collect();
-        self.merge_selected(&active, &key)
+        self.merge_selected(&active, &key)?;
+        // The merged source replaces its parents on the chart, still showing
+        // the channels that were plotted: `Power` becomes `Power · eco` and
+        // `Power · performance`.
+        for index in active {
+            self.sources[index].active = false;
+        }
+        if let Some(merged) = self.tables.tabs.last() {
+            let mut selected = Vec::new();
+            for column in merged.data.columns() {
+                let (label, _) = split_name_unit(&column.name);
+                let base = label.rsplit_once(" · ").map_or(label.as_str(), |(base, _)| base);
+                let key = clean_col(&column.name);
+                if self.selected.contains(&clean_col(base)) && !selected.contains(&key) {
+                    selected.push(key);
+                }
+            }
+            if !selected.is_empty() {
+                self.selected = selected;
+            }
+        }
+        self.refresh_catalog(false);
+        Ok(())
     }
 
     fn merge_selected(&mut self, active: &[usize], key: &str) -> Result<(), String> {
@@ -879,11 +901,14 @@ impl Workspace {
             let source = &self.sources[index];
             MergeParent { key: source.stable_key(), name: source.name.clone(), align_start: source.align_start, offset: source.offset }
         }).collect();
+        let names: Vec<&str> = active.iter().map(|&index| self.sources[index].name.as_str()).collect();
+        let tags = distinguishing_names(&names);
         let mut numeric_tables = Vec::with_capacity(active.len());
         let mut x_indices = Vec::with_capacity(active.len());
         let mut text_columns: Vec<(Vec<f64>, Vec<Column>)> = Vec::new();
         let mut reference_unit = None;
-        for &index in active {
+        let mut clock_x = None;
+        for (&index, tag) in active.iter().zip(&tags) {
             let source = &self.sources[index];
             let table = &self.tables.tabs[index];
             let frame = match &table.mask {
@@ -893,6 +918,7 @@ impl Workspace {
             let x_index = frame.columns().iter().position(|column| clean_col(&column.name) == key)
                 .ok_or_else(|| format!("“{}” does not contain the selected X axis.", source.name))?;
             let x_column = frame.column(x_index);
+            clock_x.get_or_insert(x_column.is_datetime() && !source.align_start);
             let (values, unit) = match &x_column.data {
                 ColumnData::Float(values) => {
                     let (_, unit) = split_name_unit(&x_column.name);
@@ -925,14 +951,21 @@ impl Workspace {
                     continue;
                 }
                 if column_index == x_index {
-                    numbers.push(Column::float(column.name.clone(), xs.clone()));
+                    // Aligned timestamps become elapsed seconds; say so in the
+                    // name so the axis reads as a duration.
+                    let name = if x_column.is_datetime() && source.align_start {
+                        format!("{} [s]", split_name_unit(&column.name).0)
+                    } else {
+                        column.name.clone()
+                    };
+                    numbers.push(Column::float(name, xs.clone()));
                     continue;
                 }
                 let (label, unit) = split_name_unit(&column.name);
                 let name = if unit.is_empty() {
-                    format!("{label} · {}", source.name)
+                    format!("{label} · {tag}")
                 } else {
-                    format!("{label} · {} [{unit}]", source.name)
+                    format!("{label} · {tag} [{unit}]")
                 };
                 let mut column = column.clone();
                 column.name = name;
@@ -953,6 +986,12 @@ impl Workspace {
         let mut tables = TableList::new(numeric_tables);
         let (_, mut merged) = tables.merge_tabs(None, Some(&x_indices), Extrap::Nan);
         let merged_x = merged.f64_col(x_indices[0]).into_owned();
+        // Absolute timestamps stay timestamps.
+        if clock_x == Some(true) {
+            let name = merged.column(x_indices[0]).name.clone();
+            merged.set(x_indices[0], Column::new(name, ColumnData::DateTime(merged_x.clone())))
+                .map_err(|error| error.to_string())?;
+        }
         for (xs, columns) in text_columns {
             for column in columns {
                 let ColumnData::Str(values) = column.data else { continue };
@@ -969,7 +1008,7 @@ impl Workspace {
                     .map_err(|error| error.to_string())?;
             }
         }
-        self.add_generated_table(merged, "Merged sources");
+        self.add_generated_table(merged, &combined_name(&tags, "merged"));
         let stage = self.pipeline.actions.iter().filter(|action| action.kind != ActionKind::PlotData).count();
         if let Some(source) = self.sources.last_mut() {
             source.recipe = Some(GeneratedRecipe::Merge { parents, x_key: key.to_owned() });
@@ -981,7 +1020,12 @@ impl Workspace {
     pub(crate) fn stack_sources(&mut self, common_only: bool) -> Result<(), String> {
         let indices: Vec<_> = self.sources.iter().enumerate()
             .filter_map(|(index, source)| source.active.then_some(index)).collect();
-        self.stack_selected(&indices, common_only)
+        self.stack_selected(&indices, common_only)?;
+        // The stacked source replaces its parents on the chart.
+        for index in indices {
+            self.sources[index].active = false;
+        }
+        Ok(())
     }
 
     fn stack_selected(&mut self, indices: &[usize], common_only: bool) -> Result<(), String> {
@@ -989,9 +1033,11 @@ impl Workspace {
             return Err("Select at least two sources to stack.".into());
         }
         let parents = indices.iter().map(|&index| self.sources[index].stable_key()).collect();
+        let names: Vec<&str> = indices.iter().map(|&index| self.sources[index].name.as_str()).collect();
+        let name = combined_name(&distinguishing_names(&names), "stacked");
         let (_, frame) = self.tables.vstack(Some(indices), common_only);
         self.tables.tabs.pop();
-        self.add_generated_table(frame, "Stacked sources");
+        self.add_generated_table(frame, &name);
         let stage = self.pipeline.actions.iter().filter(|action| action.kind != ActionKind::PlotData).count();
         if let Some(source) = self.sources.last_mut() {
             source.recipe = Some(GeneratedRecipe::Stack { parents, common_only });
@@ -1284,6 +1330,16 @@ impl Workspace {
     }
 }
 
+/// Name for a source built from others: `eco + performance (merged)`, or a
+/// count when the parts would make the name unwieldy.
+fn combined_name(tags: &[String], operation: &str) -> String {
+    let joined = tags.join(" + ");
+    if tags.len() <= 3 && joined.chars().count() <= 48 {
+        format!("{joined} ({operation})")
+    } else {
+        format!("{} sources ({operation})", tags.len())
+    }
+}
 
 /// Split parts often leave columns that only another device fills (package
 /// power on per-core rows): drop those instead of plotting empty series.
@@ -1550,7 +1606,9 @@ mod tests {
         assert_eq!(merged.f64_col(eco).as_ref(), &[0.0, 10.0, 20.0]);
         let state = merged.find("State · Eco").expect("Eco state");
         assert_eq!(merged.column(state).data, ColumnData::Str(vec!["idle".into(), "idle".into(), "load".into()]));
-        assert_eq!(w.sources[2].name, "Merged sources");
+        assert_eq!(w.sources[2].name, "Eco + Performance (merged)");
+        // The merged source replaces its parents on the chart.
+        assert!(!w.sources[0].active && !w.sources[1].active && w.sources[2].active);
     }
 
     #[test]

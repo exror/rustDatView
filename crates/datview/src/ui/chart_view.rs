@@ -757,8 +757,16 @@ pub(crate) fn x_axis_format(workspace: &Workspace) -> (AxisFormat, bool) {
                 })
             })
     });
+    // The plotted source's own X column decides: the channel catalog merges
+    // every loaded source, including hidden ones with other units.
     let seconds = workspace.x_key.as_ref().is_some_and(|key| {
-        workspace.channels.iter().any(|channel| &channel.key == key && channel.unit == "s")
+        let own = first.and_then(|series| workspace.tables.tabs.get(series.source)).and_then(|table| {
+            table.data.columns().iter().find(|column| dv_core::common::clean_col(&column.name) == *key)
+        });
+        match own {
+            Some(column) => dv_core::units::split_name_unit(&column.name).1 == "s",
+            None => workspace.channels.iter().any(|channel| &channel.key == key && channel.unit == "s"),
+        }
     });
     if aligned_datetime || seconds {
         (AxisFormat::Duration, aligned_datetime)

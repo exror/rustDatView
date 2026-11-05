@@ -476,7 +476,7 @@ impl StatsDock {
         if let Some(sort) = self.sort {
             rows.sort_by(|a, b| compare_rows(a, b, sort));
         }
-        let multiple_sources = workspace.sources.len() > 1;
+        let multiple_sources = workspace.sources.iter().filter(|source| source.active).count() > 1;
         let mut requested_sort = None;
         let columns = &self.settings.columns;
         let height = ui.available_height().max(50.0);

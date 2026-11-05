@@ -241,6 +241,16 @@ pub(crate) fn arrange(series: &mut Vec<SeriesData>, sources: &[Source], settings
         .iter()
         .map(|source| settings.source_slot(source))
         .collect();
+    // Line dashes tell sources apart by their order among the visible ones, so
+    // a single visible source is always drawn solid.
+    let active_rank: Vec<usize> = sources
+        .iter()
+        .scan(0, |rank, source| {
+            let current = *rank;
+            *rank += usize::from(source.active);
+            Some(current)
+        })
+        .collect();
     settings.assign_channel_slots(series.iter().map(|s| s.key.as_str()));
     // Compute before mutating series so the pane map need not borrow its strings.
     let single: BTreeMap<String, bool> = keys_by_pane
@@ -265,7 +275,7 @@ pub(crate) fn arrange(series: &mut Vec<SeriesData>, sources: &[Source], settings
         s.dash = settings
             .style_for(s.id, &s.key)
             .and_then(|style| style.dash)
-            .unwrap_or(if by_source { 0 } else { source_slot % 4 });
+            .unwrap_or(if by_source { 0 } else { active_rank.get(s.source).copied().unwrap_or(0) % 4 });
     }
 }
 fn channel_pane(channel: &str, unit: &str) -> String {
