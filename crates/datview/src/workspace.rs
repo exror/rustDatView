@@ -1054,6 +1054,7 @@ impl Workspace {
         let outputs: Vec<_> = groups.into_iter().map(|(value, rows)| {
             let mut frame = table.data.take_rows(&rows);
             frame.remove(column_index);
+            drop_empty_columns(&mut frame);
             let name = format!("{} · {}", source.name, value.label(&column_name));
             let recipe = GeneratedRecipe::Split { parent: parent.clone(), column: column_name.clone(), occurrence, value };
             (frame, name, recipe)
@@ -1116,6 +1117,7 @@ impl Workspace {
                 }
                 let mut frame = table.data.take_rows(&selected);
                 frame.remove(column_index);
+                drop_empty_columns(&mut frame);
                 let name = format!("{} · {}", self.sources[index].name, value.label(column));
                 self.add_generated_table(frame, &name);
             }
@@ -1124,7 +1126,6 @@ impl Workspace {
         self.sources[index].recipe = Some(recipe.clone());
         Ok(index)
     }
-
 
     /// Add an in-memory table (fit result, merge, stack) as a new source.
     pub(crate) fn add_generated_table(&mut self, df: dv_core::DataFrame, name: &str) {
@@ -1283,20 +1284,45 @@ impl Workspace {
     }
 }
 
-/// The parts of file names that differ: `cpu-benchmark-eco.csv` and
+
+/// Split parts often leave columns that only another device fills (package
+/// power on per-core rows): drop those instead of plotting empty series.
+fn drop_empty_columns(frame: &mut DataFrame) {
+    for index in (0..frame.columns().len()).rev() {
+        let empty = match &frame.columns()[index].data {
+            ColumnData::Float(values) | ColumnData::DateTime(values) => !values.iter().any(|v| v.is_finite()),
+            ColumnData::Str(values) => values.iter().all(|v| v.trim().is_empty() || v.trim() == "-"),
+        };
+        if empty && frame.columns().len() > 1 {
+            frame.remove(index);
+        }
+    }
+}
+
+/// The parts of source names that differ: `cpu-benchmark-eco.csv` and
 /// `cpu-benchmark-performance.csv` become `eco` and `performance`. Common
-/// prefixes and suffixes are only cut at separators so words stay whole;
-/// names that would become empty or identical are kept in full.
+/// prefixes and suffixes are only cut at separators so words stay whole, and
+/// a bare number keeps the word before it (`index 0`, `RTX 4090`). Names that
+/// would become empty or identical are kept in full.
 pub(crate) fn distinguishing_names(names: &[&str]) -> Vec<String> {
+    // Only a short alphanumeric ending is a file extension; split sources are
+    // named like `log.csv · index 0`, which has none.
     let stems: Vec<&str> = names.iter()
-        .map(|name| Path::new(name).file_stem().and_then(|stem| stem.to_str()).unwrap_or(name))
+        .map(|name| match name.rsplit_once('.') {
+            Some((stem, extension))
+                if !stem.is_empty() && (1..=5).contains(&extension.len()) && extension.chars().all(|c| c.is_ascii_alphanumeric()) =>
+            {
+                stem
+            }
+            _ => name,
+        })
         .collect();
     if stems.len() < 2 {
         return stems.iter().map(|stem| (*stem).to_owned()).collect();
     }
     let separator = |c: char| matches!(c, '-' | '_' | ' ' | '.' | '·' | '(' | ')' | '[' | ']');
     let first = stems[0];
-    // Longest common prefix, in bytes on char boundaries.
+    // Longest common prefix and suffix, in bytes on char boundaries.
     let mut prefix = first.len();
     let mut suffix = first.len();
     for stem in &stems[1..] {
@@ -1309,14 +1335,23 @@ pub(crate) fn distinguishing_names(names: &[&str]) -> Vec<String> {
             .sum());
     }
     // Back off to the last separator inside the shared part.
-    let prefix = first[..prefix].rfind(separator).map_or(0, |index| index + 1);
+    let mut prefix = first[..prefix].rfind(separator).map_or(0, |index| index + 1);
     let suffix = first[first.len() - suffix..].find(separator).map_or(0, |index| suffix - index);
-    let tags: Vec<String> = stems.iter()
-        .map(|stem| {
-            let end = stem.len().saturating_sub(suffix).max(prefix.min(stem.len()));
-            stem.get(prefix.min(stem.len())..end).unwrap_or(stem).trim_matches(separator).to_owned()
-        })
-        .collect();
+    let cut = |prefix: usize| -> Vec<String> {
+        stems.iter()
+            .map(|stem| {
+                let end = stem.len().saturating_sub(suffix).max(prefix.min(stem.len()));
+                stem.get(prefix.min(stem.len())..end).unwrap_or(stem).trim_matches(separator).to_owned()
+            })
+            .collect()
+    };
+    let mut tags = cut(prefix);
+    if prefix > 0 && tags.iter().all(|tag| !tag.is_empty() && tag.chars().all(|c| c.is_ascii_digit())) {
+        // Keep the word that says what the number counts.
+        let shared = first[..prefix].trim_end_matches(separator);
+        prefix = shared.rfind(separator).map_or(0, |index| index + 1);
+        tags = cut(prefix);
+    }
     let unique = tags.iter().collect::<std::collections::HashSet<_>>().len() == tags.len();
     if unique && tags.iter().all(|tag| !tag.is_empty()) {
         tags
@@ -1352,6 +1387,15 @@ mod tests {
         assert_eq!(distinguishing_names(&["run.csv", "run.hml"]), ["run.csv", "run.hml"]);
         assert_eq!(distinguishing_names(&["power.csv", "power-2.csv"]), ["power", "power-2"]);
         assert_eq!(distinguishing_names(&["only.csv"]), ["only"]);
+        // Split sources: numbers keep the word that names them.
+        assert_eq!(
+            distinguishing_names(&["nvidia_smi.csv · index 0", "nvidia_smi.csv · index 1"]),
+            ["index 0", "index 1"]
+        );
+        assert_eq!(
+            distinguishing_names(&["gpu.csv · Synthetic RTX 4090", "gpu.csv · Synthetic RTX 3060"]),
+            ["RTX 4090", "RTX 3060"]
+        );
     }
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);

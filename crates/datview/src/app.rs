@@ -52,18 +52,12 @@ struct Toast {
     action: Option<ToastAction>,
 }
 
-/// A follow-up offered by a notification, e.g. undoing an automatic change.
+/// An automatic change a notification offers to undo.
 enum ToastAction {
     /// Return these sources (by stable key) to absolute time.
     UndoAlign(Vec<String>),
-}
-
-impl ToastAction {
-    fn label(&self) -> &'static str {
-        match self {
-            Self::UndoAlign(_) => "Undo",
-        }
-    }
+    /// Remove the split parts and show the parent source again.
+    UndoSplit { parent: String, parts: Vec<String> },
 }
 
 struct SessionOverrides {
@@ -283,11 +277,56 @@ impl DatView {
                         source.align_start = false;
                     }
                 }
-                self.chart.fit_all();
-                self.chart.selection = None;
-                self.workspace.rebuild();
+            }
+            ToastAction::UndoSplit { parent, parts } => {
+                for index in (0..self.workspace.sources.len()).rev() {
+                    if parts.contains(&self.workspace.sources[index].stable_key()) {
+                        self.workspace.remove_source(index);
+                    }
+                }
+                if let Some(source) = self.workspace.sources.iter_mut().find(|source| source.stable_key() == parent) {
+                    source.active = true;
+                }
+                self.checked_sources = self.workspace.sources.len();
             }
         }
+        self.chart.fit_all();
+        self.chart.selection = None;
+        self.workspace.rebuild();
+    }
+
+    /// Logs that interleave several devices row by row (nvidia-smi, PTAT,
+    /// turbostat) zigzag between them when plotted. Newly opened ones are split
+    /// into one source per device, with an Undo in the notification.
+    fn split_interleaved(&mut self, new: std::ops::Range<usize>) {
+        for index in new.rev() {
+            let (Some(source), Some(table)) = (self.workspace.sources.get(index), self.workspace.tables.tabs.get(index)) else {
+                continue;
+            };
+            if source.recipe.is_some() || source.path.as_os_str().is_empty() {
+                continue;
+            }
+            let Some((column, devices)) = ui::sidebar::interleaved_suggestion(table, self.workspace.x_key.as_deref()) else {
+                continue;
+            };
+            let parent = source.stable_key();
+            let name = source.name.clone();
+            let column_name = dv_core::units::split_name_unit(&table.data.column(column).name).0;
+            let before = self.workspace.sources.len();
+            match self.workspace.split_source(index, column) {
+                Ok(()) => {
+                    let parts = self.workspace.sources[before..].iter().map(|source| source.stable_key()).collect();
+                    self.toasts.push(Toast {
+                        message: format!("{name} interleaves {devices} devices; split by {column_name}"),
+                        error: false,
+                        created: Instant::now(),
+                        action: Some(ToastAction::UndoSplit { parent, parts }),
+                    });
+                }
+                Err(error) => self.workspace.problems.push(error),
+            }
+        }
+        self.workspace.rebuild();
     }
 
     fn remember(list: &mut Vec<PathBuf>, path: PathBuf) {
@@ -548,9 +587,10 @@ impl DatView {
         let source_count = self.workspace.sources.len();
         if self.workspace.loading.is_none() && self.restore.as_ref().is_none_or(|restore| !restore.is_pending()) {
             if source_count > self.checked_sources {
+                self.split_interleaved(self.checked_sources..source_count);
                 self.align_separate_recordings();
             }
-            self.checked_sources = source_count;
+            self.checked_sources = self.workspace.sources.len();
         }
         if let Some(restore) = &mut self.restore {
             if let Some(view) = restore.finish(&mut self.workspace) {
@@ -1469,10 +1509,8 @@ impl DatView {
                                     Layout::top_down(Align::Min),
                                     |ui| { ui.add(egui::Label::new(&toast.message).wrap()); },
                                 );
-                                if let Some(action) = &toast.action {
-                                    if ui.button(RichText::new(action.label()).color(tokens.accent)).clicked() {
-                                        acted = Some(index);
-                                    }
+                                if toast.action.is_some() && ui.button(RichText::new("Undo").color(tokens.accent)).clicked() {
+                                    acted = Some(index);
                                 }
                                 if widgets::icon_button(ui, icons::CLOSE, "Dismiss notification").clicked() {
                                     dismissed = Some(index);

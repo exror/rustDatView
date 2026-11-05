@@ -114,12 +114,16 @@ impl DistinctValues {
     }
 }
 
+/// Columns that identify a device, best first. Names make readable source
+/// labels (`RTX 4090`); identical names fall back to indices automatically
+/// because the split needs one value per device.
 fn split_priority(name: &str) -> u8 {
     match clean_col(name).as_str() {
-        "index" | "gpuindex" | "deviceindex" => 0,
-        "core" | "cor" | "cpu" | "cpuid" | "coreid" => 1,
-        "device" | "processid" | "pid" | "application" | "gpu" | "thread" | "thr" => 2,
-        _ => 3,
+        "name" | "gpuname" | "devicename" | "device" | "gpu" => 0,
+        "index" | "gpuindex" | "deviceindex" => 1,
+        "core" | "cor" | "cpu" | "cpuid" | "coreid" => 2,
+        "processid" | "pid" | "application" | "thread" | "thr" => 3,
+        _ => 4,
     }
 }
 
@@ -161,8 +165,9 @@ impl CardinalityScan {
     }
 }
 
-/// Inspect a bounded prefix; actual split choices are verified over all rows.
-fn interleaved_suggestion(table: &Table, x_key: Option<&str>) -> Option<(usize, usize)> {
+/// The column that tells interleaved devices apart and how many there are.
+/// Inspects a bounded prefix; the split itself uses every row.
+pub(crate) fn interleaved_suggestion(table: &Table, x_key: Option<&str>) -> Option<(usize, usize)> {
     let time_index = x_key.and_then(|key| table.data.columns().iter().position(|column| clean_col(&column.name) == key))
         .filter(|&index| {
             let column = table.data.column(index);
@@ -431,6 +436,13 @@ impl Sidebar {
         let mut rename_commit = None;
         let mut rename_cancel = false;
         let list_height = (ui.available_height() * 0.4).max(150.0);
+        // Sources already split need no split suggestion.
+        let split_parents: HashSet<String> = workspace.sources.iter()
+            .filter_map(|source| match &source.recipe {
+                Some(crate::workspace::GeneratedRecipe::Split { parent, .. }) => Some(parent.clone()),
+                _ => None,
+            })
+            .collect();
         egui::ScrollArea::vertical().id_salt("sources-list").max_height(list_height).show(ui, |ui| {
             for (index, source) in workspace.sources.iter_mut().enumerate() {
                 let Some(table) = workspace.tables.tabs.get(index) else { continue };
@@ -443,6 +455,7 @@ impl Sidebar {
                 let suggestion_key = (table.identity(), workspace.x_key.clone().unwrap_or_default());
                 let suggestion = *self.suggestions.entry(suggestion_key)
                     .or_insert_with(|| interleaved_suggestion(table, workspace.x_key.as_deref()));
+                let suggestion = suggestion.filter(|_| !split_parents.contains(&key));
                 egui::Frame::new()
                     .fill(tokens.surface)
                     .stroke(Stroke::new(1.0, tokens.border))
@@ -557,7 +570,7 @@ impl Sidebar {
                                 source_action = Some(SourceAction::Split(index, column));
                             }
                         }
-                        if active_sources > 1 {
+                        if active_sources > 1 && source.active {
                             ui.horizontal(|ui| {
                                 ui.add_space(22.0);
                                 output.changed |= ui.checkbox(&mut source.align_start, "Start at 0")
