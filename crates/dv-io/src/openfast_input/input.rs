@@ -445,12 +445,171 @@ fn table(
         rows,
     })
 }
+
+fn is_number(s: &str) -> bool {
+    s.parse::<f64>().is_ok() || ((s.contains('d') || s.contains('D')) && float(s).is_some())
+}
+
+/// Identify the distinctive input syntax before the generic text reader gets
+/// a chance to interpret OpenFAST tables as ordinary whitespace telemetry.
+pub(crate) fn looks_like_fast_input(text: &str) -> bool {
+    let contains = |line: &str, needle: &str| {
+        line.as_bytes()
+            .windows(needle.len())
+            .any(|part| part.eq_ignore_ascii_case(needle.as_bytes()))
+    };
+    let mut initial = text.lines();
+    let first = initial.next().unwrap_or("");
+    let second = initial.next().unwrap_or("");
+    let third = initial.next().unwrap_or("");
+    if first.starts_with('!') && contains(second, "flex") && contains(third, "!dimension") {
+        return true;
+    }
+    if let Some(n) = third
+        .split_whitespace()
+        .next()
+        .and_then(|s| s.parse::<usize>().ok())
+    {
+        let mut following = text.lines().skip(12);
+        let angle = following.next();
+        let minimum = following.next();
+        if angle
+            .and_then(|line| line.split_whitespace().nth(n))
+            .is_some_and(|s| s.eq_ignore_ascii_case("angle"))
+            && minimum
+                .and_then(|line| line.split_whitespace().nth(n))
+                .is_some_and(|s| s.eq_ignore_ascii_case("minimum"))
+            && following.next().is_some()
+        {
+            return true;
+        }
+    }
+    let branded = text.lines().take(8).any(|line| {
+        contains(line, "openfast") || (contains(line, "fast") && contains(line, "input file"))
+    });
+    let mut labeled = false;
+    for line in text.lines().take(80) {
+        let mut words = line.split_whitespace();
+        let (Some(value), Some(label), Some(comment)) = (words.next(), words.next(), words.next())
+        else {
+            continue;
+        };
+        let valid_value = is_number(value)
+            || value.eq_ignore_ascii_case("true")
+            || value.eq_ignore_ascii_case("false")
+            || value.eq_ignore_ascii_case("default")
+            || value.starts_with('"')
+            || value.starts_with('\'');
+        let valid_label = label.starts_with(|c: char| c.is_ascii_alphabetic())
+            && label
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "_()".contains(c));
+        if valid_value && valid_label && (comment.starts_with('!') || comment == "-") {
+            labeled = true;
+            if [
+                "NumCoords",
+                "NumBlNds",
+                "NBlInpSt",
+                "NTwInpSt",
+                "NumTwrNds",
+                "NumAlf",
+                "station_total",
+            ]
+            .iter()
+            .any(|key| label.eq_ignore_ascii_case(key))
+            {
+                return true;
+            }
+        }
+    }
+    branded && labeled
+}
+
+fn looks_like_data_table(text: &str) -> bool {
+    let mut lines = text.lines().filter(|line| !line.trim().is_empty());
+    let (Some(header), Some(first), Some(second)) = (lines.next(), lines.next(), lines.next())
+    else {
+        return false;
+    };
+    let numeric_whitespace_row = |line: &str, width: usize| {
+        line.split_whitespace().count() == width && line.split_whitespace().all(is_number)
+    };
+    let width = header.split_whitespace().count();
+    if width >= 2
+        && numeric_whitespace_row(header, width)
+        && numeric_whitespace_row(first, width)
+        && numeric_whitespace_row(second, width)
+    {
+        return true;
+    }
+    for delimiter in [',', ';'] {
+        let width = header.split(delimiter).count();
+        let numeric_row = |line: &str| {
+            line.split(delimiter).count() == width
+                && line.split(delimiter).all(|word| is_number(word.trim()))
+        };
+        if width >= 2 && numeric_row(header) && numeric_row(first) && numeric_row(second) {
+            return true;
+        }
+    }
+    let header = header.trim_start();
+    if !header
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, '"' | '#'))
+    {
+        return false;
+    }
+    let starts_with_number = |line: &str| {
+        line.trim_start()
+            .trim_start_matches('"')
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit() || matches!(c, '-' | '+' | '.'))
+    };
+    if !starts_with_number(first) || !starts_with_number(second) {
+        return false;
+    }
+    if [',', ';'].iter().any(|&delimiter| {
+        let n = header.matches(delimiter).count();
+        n > 0 && first.matches(delimiter).count() == n && second.matches(delimiter).count() == n
+    }) {
+        return true;
+    }
+    let count = header.split_whitespace().count();
+    count >= 2
+        && header
+            .split_whitespace()
+            .all(|word| word.chars().any(|c| c.is_ascii_alphabetic()))
+        && first.split_whitespace().count() == count
+        && second.split_whitespace().count() == count
+        && first
+            .split_whitespace()
+            .filter(|word| is_number(word))
+            .count()
+            >= 2
+        && second
+            .split_whitespace()
+            .filter(|word| is_number(word))
+            .count()
+            >= 2
+}
+
 impl FastInputFile {
     pub fn read(path: &Path) -> Result<Self, IoError> {
+        if crate::registry::text_prefix(path)?
+            .as_deref()
+            .is_some_and(|text| looks_like_data_table(text) && !looks_like_fast_input(text))
+        {
+            return Err(IoError::WrongFormat("not a FAST input file".into()));
+        }
         let text = read_text(path)?;
         Self::parse(path, &text)
     }
     pub fn parse(path: &Path, text: &str) -> Result<Self, IoError> {
+        if looks_like_data_table(text) && !looks_like_fast_input(text) {
+            return Err(IoError::WrongFormat("not a FAST input file".into()));
+        }
         let lines: Vec<_> = text.lines().collect();
         let mut f = Self {
             filename: path.into(),

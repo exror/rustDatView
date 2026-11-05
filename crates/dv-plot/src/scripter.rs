@@ -196,7 +196,7 @@ fn adder_code(plugin: &Plugin, x_column: usize, indent: &str) -> Result<String> 
         p if p.is_plot()=>{
             let xy=plot_plugin_code(p)?;
             let preserve=if matches!(p,Plugin::Sampler{..}){String::new()}else{format!("{indent}if j == {x_column}:\n{indent}{indent}columns.append(df.iloc[:, j].reset_index(drop=True))\n{indent}{indent}continue\n")};
-            format!("columns = []\nx_original = np.asarray(df.iloc[:, {x_column}])\nif x_original.dtype.kind == 'M':\n{indent}x_original = x_original.astype('datetime64[ns]').astype(np.int64) / 1e9\nfor j in range(df.shape[1]):\n{indent}if str(df.columns[j]).lower() == 'index':\n{indent}{indent}continue\n{preserve}{indent}x, y = x_original.copy(), np.asarray(df.iloc[:, j]).copy()\n{}\n{indent}columns.append(pd.Series(x if j == {x_column} else y, name=df.columns[j]))\ndf_new = pd.concat(columns, axis=1)\n_added.append(df_new)",xy.lines().map(|l|format!("{indent}{l}")).collect::<Vec<_>>().join("\n"))
+            format!("columns = []\nx_original = np.asarray(df.iloc[:, {x_column}])\nif x_original.dtype.kind == 'M':\n{indent}x_original = datetime_seconds(x_original)\nfor j in range(df.shape[1]):\n{indent}if str(df.columns[j]).lower() == 'index':\n{indent}{indent}continue\n{preserve}{indent}x, y = x_original.copy(), np.asarray(df.iloc[:, j]).copy()\n{}\n{indent}columns.append(pd.Series(x if j == {x_column} else y, name=df.columns[j]))\ndf_new = pd.concat(columns, axis=1)\n_added.append(df_new)",xy.lines().map(|l|format!("{indent}{l}")).collect::<Vec<_>>().join("\n"))
         },
         _=>return Err(DvError::msg("Plugin cannot generate tables")),
     })
@@ -243,19 +243,20 @@ fn transform_code(kind: &PlotType) -> Result<String> {
         PlotType::Regular => String::new(),
         PlotType::Pdf(o) => {
             let numeric = if o.smooth {
-                format!("x, y = pdf_histogram(y, nBins=bins, norm=True, count=False) if np.nanmax(y) == np.nanmin(y) else pdf_gaussian_kde(y, nOut=bins)")
+                "x, y = pdf_histogram(y, nBins=bins, norm=True, count=False) if np.nanmax(y) == np.nanmin(y) else pdf_gaussian_kde(y, nOut=bins)"
             } else {
-                "x, y = pdf_histogram(y, nBins=bins, norm=True, count=False)".into()
+                "x, y = pdf_histogram(y, nBins=bins, norm=True, count=False)"
             };
-            format!("if y.dtype.kind == 'M':\n    raise ValueError('Cannot plot PDF of dates')\nelif y.dtype.kind in 'OUS':\n    if len(y) > 100:\n        raise ValueError('String PDF dataset is too large')\n    counts = pd.Series(y).value_counts().sort_index()\n    x, y = counts.index.to_numpy(), counts.to_numpy() / len(y)\nelse:\n    bins = min({}, len(y))\n    {numeric}",o.bins)
+            format!("bins = min({}, len(y))\nif bins == 0:\n    raise ValueError('PDF requires data and at least one bin')\nif y.dtype.kind == 'M':\n    raise ValueError('Cannot plot PDF of dates')\nelif y.dtype.kind in 'OUS':\n    if len(y) > 100:\n        raise ValueError('String PDF dataset is too large')\n    counts = pd.Series(y).value_counts().sort_index()\n    x, y = counts.index.to_numpy(), counts.to_numpy() / len(y)\nelse:\n    {numeric}",o.bins)
         }
         PlotType::MinMax(o) => {
             let mut lines = Vec::new();
             if o.y_center == "None" {
                 if o.y_scale {
-                    lines.push("y = np.zeros_like(y, dtype=float) if np.nanmax(y) == np.nanmin(y) else (y - np.nanmin(y)) / (np.nanmax(y) - np.nanmin(y))".into());
+                    lines.push("if y.dtype.kind in 'OUS':\n    raise ValueError('Cannot scale strings')\nif _y_is_date:\n    y = datetime_seconds(y)\n    _ymin, _ymax = y[0], y[-1]\nelse:\n    _ymin, _ymax = np.nanmin(y), np.nanmax(y)\ny = np.zeros_like(y, dtype=float) if _ymax == _ymin else (y - _ymin) / (_ymax - _ymin)".into());
                 }
             } else {
+                lines.push("if _y_is_date or y.dtype.kind in 'OUS':\n    raise ValueError('Cannot center dates or strings')".into());
                 let center = match o.y_center.as_str() {
                     "Mean=0" | "Mean=ref" => "np.nanmean(y)",
                     "Mid=0" | "Mid=ref" => "(np.nanmax(y) + np.nanmin(y)) / 2",
@@ -269,12 +270,12 @@ fn transform_code(kind: &PlotType) -> Result<String> {
                 lines.push(format!("y = y + {} - ({center})", number(reference)));
             }
             if o.x_scale {
-                lines.push("x = np.zeros_like(x, dtype=float) if np.nanmax(x) == np.nanmin(x) else (x - np.nanmin(x)) / (np.nanmax(x) - np.nanmin(x))".into());
+                lines.push("if x.dtype.kind in 'OUS':\n    raise ValueError('Cannot scale strings')\nif _x_is_date:\n    _xmin, _xmax = x[0], x[-1]\nelse:\n    _xmin, _xmax = np.nanmin(x), np.nanmax(x)\nx = np.zeros_like(x, dtype=float) if _xmax == _xmin else (x - _xmin) / (_xmax - _xmin)".into());
             }
             lines.join("\n")
         }
         PlotType::Fft(o) => {
-            let mut code=format!("x, y, Info = fft_wrap(x, y, output_type={}, averaging={}, averaging_window={}, detrend={}, nExp={}, nPerDecade={})",quote(&o.y_type),quote(&o.averaging),quote(&o.window),boolean(o.detrend),o.n_exp,o.points_per_decade);
+            let mut code=format!("_fft_dt = None\nif _x_is_date:\n    _fft_dt = np.nan if len(x) < 2 else x[1] - x[0]\n    if len(x) >= 2 and np.isnan(_fft_dt):\n        _fft_dt = x[-1] - x[-2]\nx, y, Info = fft_wrap(x, y, dt=_fft_dt, output_type={}, averaging={}, averaging_window={}, detrend={}, nExp={}, nPerDecade={})",quote(&o.y_type),quote(&o.averaging),quote(&o.window),boolean(o.detrend),o.n_exp,o.points_per_decade);
             match o.x_type.as_str() {
                 "1/x" => {}
                 "x" => code.push_str("\nx = 1 / x"),
@@ -421,7 +422,30 @@ def evaluate_mask(df, expression):
         raise ValueError('Mask returned no values')
     return mask"#;
 
-const COMPARE_CODE: &str = r#"def compare_curves(curves, mode, method):
+const COMPARE_CODE: &str = r#"def _compare_interpolate(target, coordinates, values):
+    if target.dtype.kind == 'M':
+        target = datetime_seconds(target)
+    if coordinates.dtype.kind == 'M':
+        coordinates = datetime_seconds(coordinates)
+    if len(coordinates) == 0 or not np.all(np.isfinite(coordinates)) or np.any(np.diff(coordinates) < 0):
+        raise ValueError('interpolation coordinates must be finite, nonempty and ascending')
+    after = np.searchsorted(coordinates, target, side='right')
+    before = np.clip(after - 1, 0, len(coordinates) - 1)
+    next_index = np.clip(after, 0, len(coordinates) - 1)
+    weight = np.zeros(len(target), dtype=float)
+    inside = (after > 0) & (after < len(coordinates)) & ~np.isnan(target)
+    weight[inside] = (target[inside] - coordinates[before[inside]]) / (coordinates[next_index[inside]] - coordinates[before[inside]])
+    weight[np.isnan(target)] = np.nan
+    left, right = values[before], values[next_index]
+    zero, one = weight == 0, weight == 1
+    between = ~(zero | one)
+    result = np.empty(len(target), dtype=float)
+    result[zero] = left[zero]
+    result[one] = right[one]
+    result[between] = (1 - weight[between]) * left[between] + weight[between] * right[between]
+    return result
+
+def compare_curves(curves, mode, method):
     if len(curves) < 2:
         raise ValueError('Comparison requires at least two signals')
     groups = {}
@@ -431,7 +455,7 @@ const COMPARE_CODE: &str = r#"def compare_curves(curves, mode, method):
         if mode == 'TablesSameColumns':
             key = curve['column']
         elif mode == 'TablesSimilarColumns':
-            key = re.sub(r'[_ -]', '', no_unit(curve['sy']).lower().strip())
+            key = re.sub(r'[_ -]', '', no_unit(no_unit(curve['sy']).strip()).lower().strip())
         else:
             key = 0
         groups.setdefault(key, []).append(curve)
@@ -439,15 +463,18 @@ const COMPARE_CODE: &str = r#"def compare_curves(curves, mode, method):
     for group in groups.values():
         ref = group[0]
         near_zero = np.mean(np.abs(ref['y'])) < 1e-7
-        others = group[1:2] if mode == 'TablesOneColumn' else group[1:]
-        for curve in others:
+        for curve in group[1:]:
             curve = curve.copy()
+            if mode == 'OneTableColumns':
+                curve['label'] = no_unit(curve['sy']) + ' wrt. ' + no_unit(ref['sy'])
+            else:
+                curve['label'] = curve['st'] + ' wrt. ' + ref['st'] + ', ' + curve['sy']
             if mode == 'OneTableColumns' or ref['x'].dtype.kind in 'OUS' or curve['x'].dtype.kind in 'OUS':
                 if len(curve['y']) != len(ref['y']):
                     raise ValueError('Cannot compare different lengths without numeric x')
                 y = curve['y']
             else:
-                y = np.interp(ref['x'], curve['x'], curve['y'])
+                y = _compare_interpolate(ref['x'], curve['x'], curve['y'])
             if method == 'YY':
                 curve['x'], curve['y'] = ref['y'], y
                 curve['sx'] = ref['sy']
@@ -456,21 +483,22 @@ const COMPARE_CODE: &str = r#"def compare_curves(curves, mode, method):
                 curve['sx'] = ref['sx']
                 denominator = ref['y'] + (1 if near_zero else 0)
                 if method == 'Relative':
-                    curve['y'] = (y - ref['y']) / denominator * 100
+                    curve['y'] = 100 * (y - ref['y']) / denominator
                     curve['sy'] = 'Relative error [%]'
                 elif method == 'AbsRelative':
-                    curve['y'] = np.abs((y - ref['y']) / denominator) * 100
+                    curve['y'] = np.abs(100 * (y - ref['y']) / denominator)
                     curve['sy'] = 'Abs. relative error [%]'
                 elif method == 'Ratio':
                     curve['y'] = (y + (1 if near_zero else 0)) / denominator
                     curve['sy'] = 'Ratio [-]'
                 elif method == 'Absolute':
                     curve['y'] = y - ref['y']
-                    unit = ref['sy'].rsplit('[', 1)[-1].rstrip(']') if '[' in ref['sy'] else ''
+                    unit_name = ref['sy'].replace('(', ' [').replace(')', ']')
+                    unit_index = unit_name.rfind('[')
+                    unit = unit_name[unit_index + 1:].replace(']', '') if unit_index > 0 else ''
                     curve['sy'] = 'Absolute error [' + unit + ']'
                 else:
                     raise ValueError('Unsupported comparison method')
-            curve['label'] += ' wrt. ' + ref['label']
             output.append(curve)
     if not output:
         raise ValueError('No matching columns to compare')
@@ -568,6 +596,7 @@ impl PythonScripter {
         }
         let indent = &o.indent;
         lines.push(format!("def no_unit(s):\n{indent}s = s.replace('(', ' [').replace(')', ']').replace('_[', ' [')\n{indent}i = s.rfind('[')\n{indent}return s[:i].strip() if i > 0 else s"));
+        lines.push(format!("def datetime_seconds(values):\n{indent}result = values.astype('datetime64[ns]').astype(np.int64).astype(float) / 1e9\n{indent}result[np.isnat(values)] = np.nan\n{indent}return result"));
         if expressions {
             lines.push(
                 MASK_CODE
@@ -760,10 +789,15 @@ impl PythonScripter {
         }
         lines.push("\ndef preproXY(x, y):".into());
         lines.push(format!(
-            "{indent}x, y = np.asarray(x).copy(), np.asarray(y).copy()"
+            "{indent}x, y = np.asarray(x).copy(), np.asarray(y).copy()\n{indent}_x_is_date, _y_is_date = x.dtype.kind == 'M', y.dtype.kind == 'M'\n{indent}if x.dtype.kind in 'iub':\n{indent}{indent}x = x.astype(float)\n{indent}if y.dtype.kind in 'iub':\n{indent}{indent}y = y.astype(float)"
         ));
-        if pipeline.has_plot_actions() || matches!(self.plot_type, PlotType::Fft(_)) {
-            lines.push(format!("{indent}if x.dtype.kind == 'M':\n{indent}{indent}x = x.astype('datetime64[ns]').astype(np.int64) / 1e9"));
+        let convert_date_x = pipeline.has_plot_actions()
+            || matches!(self.plot_type, PlotType::Fft(_))
+            || matches!(&self.plot_type, PlotType::MinMax(options) if options.x_scale);
+        if convert_date_x {
+            lines.push(format!(
+                "{indent}if _x_is_date:\n{indent}{indent}x = datetime_seconds(x)"
+            ));
         }
         for action in &pipeline.actions {
             if action.enabled && action.kind == ActionKind::PlotData {
@@ -776,6 +810,11 @@ impl PythonScripter {
             let leading = l.len() - l.trim_start_matches(' ').len();
             let nested = indent.repeat(leading / 4);
             lines.push(format!("{indent}{nested}{}", l.trim_start_matches(' ')));
+        }
+        let preserve_date_x = matches!(self.plot_type, PlotType::Regular)
+            || matches!(&self.plot_type, PlotType::MinMax(options) if !options.x_scale);
+        if convert_date_x && preserve_date_x {
+            lines.push(format!("{indent}if _x_is_date:\n{indent}{indent}x = pd.to_datetime(x, unit='s').to_numpy()"));
         }
         lines.push(format!("{indent}return x, y"));
         lines.push(format!("\nfig, axes = plt.subplots({}, {}, squeeze=False, sharex=True, figsize=(6.4, 4.8))\naxes = axes.ravel()",o.subplot_rows,o.subplot_cols));
@@ -815,7 +854,7 @@ impl PythonScripter {
             lines.push(format!("df = _dfs[{it}]\nif _masks[{it}] is not None:\n{indent}df = df.loc[_masks[{it}]]\nx, y = preproXY(df.iloc[:, {ix}], df.iloc[:, {iy}])\nax = axes[{axis}]"));
             let label = format!("{} | {sy}", table.nickname());
             if self.comparison.is_some() {
-                lines.push(format!("curves.append({{'x': x, 'y': y, 'sx': {}, 'sy': {}, 'label': {}, 'column': {iy}, 'axis': {axis}, 'style': {}, 'marker': {}}})",quote(&sx),quote(&sy),quote(&label),quote(&o.line_styles[i%o.line_styles.len()]),quote(&o.markers[i%o.markers.len()])));
+                lines.push(format!("curves.append({{'x': x, 'y': y, 'sx': {}, 'sy': {}, 'st': {}, 'label': {}, 'column': {iy}, 'axis': {axis}, 'style': {}, 'marker': {}}})",quote(&sx),quote(&sy),quote(&table.active_name),quote(&label),quote(&o.line_styles[i%o.line_styles.len()]),quote(&o.markers[i%o.markers.len()])));
             } else {
                 lines.push(format!(
                     "ax.{}(x, y, {}ls={}, marker={}, lw={}, ms={}, label={})",
@@ -885,5 +924,165 @@ impl PythonScripter {
             lines.push("plt.show()".into());
         }
         Ok(lines.join("\n") + "\n")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dv_core::{Column, DataFrame};
+
+    fn datetime_table(name: &str, x: Vec<f64>, y: Vec<f64>) -> Table {
+        Table::from_df(
+            DataFrame::from_columns(vec![
+                Column::datetime("Time [s]", x),
+                Column::float("Load (N)", y),
+            ])
+            .unwrap(),
+            name,
+        )
+    }
+
+    fn run_python(script: &str) {
+        let python = std::env::var("PYTHON").unwrap_or_else(|_| "python".into());
+        let result = std::process::Command::new(python)
+            .args(["-c", script])
+            .env("MPLBACKEND", "Agg")
+            .output()
+            .expect("Python is required for this ignored test");
+        assert!(
+            result.status.success(),
+            "Python export failed:\n{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    #[test]
+    fn exports_spectrum_defaults_and_comparison_pairing() {
+        let scripter = PythonScripter {
+            plot_type: PlotType::Fft(crate::FftOptions::default()),
+            comparison: Some((CompareMode::TablesOneColumn, CompareMethod::Ratio)),
+            ..Default::default()
+        };
+        let code = scripter.generate(&[], &Pipeline::default()).unwrap();
+        assert!(code.contains(
+            "output_type=\"PSD\", averaging=\"Welch\", averaging_window=\"Hamming\", detrend=False, nExp=11, nPerDecade=20"
+        ));
+        assert!(code.contains("for curve in group[1:]:"));
+        assert!(code.contains("dt=_fft_dt"));
+    }
+
+    #[test]
+    #[ignore = "requires Python with NumPy, pandas, matplotlib and pyDatView"]
+    fn exported_datetime_spectrum_matches_rust() {
+        let x: Vec<_> = (0..64).map(|i| 1_000.0 + i as f64 * 0.125).collect();
+        let y: Vec<_> = (0..64)
+            .map(|i| 2.0 + (std::f64::consts::TAU * i as f64 / 16.0).sin())
+            .collect();
+        let table = datetime_table("spectrum", x, y);
+        let options = crate::FftOptions {
+            n_exp: 5,
+            ..Default::default()
+        };
+        let mut expected = crate::PlotData::from_table(&table, 1, 2, None).unwrap();
+        expected.to_fft(&options).unwrap();
+        let (x, y) = expected.numeric_xy().unwrap();
+        let mut scripter = PythonScripter::default();
+        scripter.options.show = false;
+        scripter.selections = vec![(0, 1, 2)];
+        scripter.plot_type = PlotType::Fft(options);
+        let mut code = scripter.generate(&[table], &Pipeline::default()).unwrap();
+        code.push_str(&format!(
+            "\nnp.testing.assert_allclose(axes[0].lines[0].get_xdata(), {}, rtol=1e-11, atol=1e-11)\n\
+             np.testing.assert_allclose(axes[0].lines[0].get_ydata(), {}, rtol=1e-11, atol=1e-11)\n",
+            numbers(x),
+            numbers(y)
+        ));
+        run_python(&code);
+    }
+
+    #[test]
+    #[ignore = "requires Python with NumPy, pandas and matplotlib"]
+    fn exported_comparisons_match_rust_with_three_datetime_tables() {
+        let tables = vec![
+            datetime_table("reference", vec![100., 101., 102.], vec![1., 2., 3.]),
+            datetime_table("second", vec![100., 102.], vec![2., 6.]),
+            datetime_table("third", vec![100., 102.], vec![3., 9.]),
+        ];
+        let plots: Vec<_> = tables
+            .iter()
+            .map(|t| crate::PlotData::from_table(t, 1, 2, None).unwrap())
+            .collect();
+        for method in [
+            CompareMethod::Relative,
+            CompareMethod::AbsRelative,
+            CompareMethod::Ratio,
+            CompareMethod::Absolute,
+            CompareMethod::YY,
+        ] {
+            let expected = crate::compare(&plots, CompareMode::TablesOneColumn, method).unwrap();
+            let mut scripter = PythonScripter::default();
+            scripter.options.show = false;
+            scripter.selections = vec![(0, 1, 2), (1, 1, 2), (2, 1, 2)];
+            scripter.comparison = Some((CompareMode::TablesOneColumn, method));
+            let mut code = scripter.generate(&tables, &Pipeline::default()).unwrap();
+            code.push_str("\nassert len(axes[0].lines) == 2\n");
+            for (i, curve) in expected.iter().enumerate() {
+                let (x, y) = curve.numeric_xy().unwrap();
+                let actual_x = if matches!(curve.x, ColumnData::DateTime(_)) {
+                    format!("datetime_seconds(np.asarray(axes[0].lines[{i}].get_xdata()))")
+                } else {
+                    format!("axes[0].lines[{i}].get_xdata()")
+                };
+                code.push_str(&format!(
+                    "np.testing.assert_allclose({actual_x}, {}, rtol=1e-12, atol=1e-12)\nnp.testing.assert_allclose(axes[0].lines[{i}].get_ydata(), {}, rtol=1e-12, atol=1e-12)\nassert axes[0].lines[{i}].get_label() == {}\n",
+                    numbers(x),
+                    numbers(y),
+                    quote(&curve.syl)
+                ));
+            }
+            code.push_str(&format!(
+                "assert axes[0].get_ylabel() == {}\n",
+                quote(&expected[1].sy)
+            ));
+            code.push_str(
+                "nat = np.array(['1970-01-01T00:01:40', 'NaT'], dtype='datetime64[ns]')\n\
+                 assert np.isnan(datetime_seconds(nat)[1])\n\
+                 target = np.array([-1., 1., 1.5, 2., np.nan, 3.])\n\
+                 xp = np.array([0., 1., 1., 2.])\n\
+                 yp = np.array([10., 20., 30., np.nan])\n\
+                 np.testing.assert_allclose(_compare_interpolate(target, xp, yp), [10., 30., np.nan, np.nan, np.nan, np.nan], equal_nan=True)\n\
+                 try:\n    _compare_interpolate(np.array([0.]), np.array([1., 0.]), np.array([1., 2.]))\n\
+                 except ValueError:\n    pass\n\
+                 else:\n    raise AssertionError('unsorted interpolation coordinates were accepted')\n",
+            );
+            code.push_str(
+                "zero_ref = dict(curves[0], y=np.zeros(3))\n\
+                 zero_other = dict(curves[0], y=np.array([-1., 0., 1.]))\n\
+                 np.testing.assert_allclose(compare_curves([zero_ref, zero_other], 'TablesOneColumn', 'Ratio')[0]['y'], [0., 1., 2.])\n\
+                 np.testing.assert_allclose(compare_curves([zero_ref, zero_other], 'TablesOneColumn', 'Relative')[0]['y'], [-100., 0., 100.])\n",
+            );
+            run_python(&code);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires Python with NumPy, pandas and matplotlib"]
+    fn exported_datetime_normalization_matches_plotdata_endpoints() {
+        let mut scripter = PythonScripter::default();
+        scripter.options.show = false;
+        scripter.plot_type = PlotType::MinMax(crate::MinMaxOptions {
+            x_scale: true,
+            ..Default::default()
+        });
+        let mut code = scripter.generate(&[], &Pipeline::default()).unwrap();
+        code.push_str(
+            "\nx = np.array(['1970-01-01T00:01:40', '1970-01-01T00:01:39', '1970-01-01T00:01:43'], dtype='datetime64[ns]')\n\
+             y = np.array(['1970-01-01T00:06:40', '1970-01-01T00:10:00', '1970-01-01T00:08:20'], dtype='datetime64[ns]')\n\
+             x, y = preproXY(x, y)\n\
+             np.testing.assert_allclose(x, [0., -1. / 3., 1.])\n\
+             np.testing.assert_allclose(y, [0., 2., 1.])\n",
+        );
+        run_python(&code);
     }
 }

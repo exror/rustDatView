@@ -410,7 +410,7 @@ pub fn write_binary(
     for s in names.iter().chain(&units) {
         fixed_text(&mut w, s, width)?;
     }
-    for i in 0..nt {
+    for (i, _) in cols[0].iter().take(nt).enumerate() {
         for j in 0..nc {
             let v = (cols[j + 1][i] * scales[j] as f64 + offsets[j] as f64).clamp(-32768.0, 32767.0)
                 as i16;

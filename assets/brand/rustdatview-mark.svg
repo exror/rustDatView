@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+<title id="title">rustDatView — hexagon and abstract data-signal mark</title>
+<defs><mask id="signal" maskUnits="userSpaceOnUse" x="0" y="0" width="256" height="256"><path fill="white" d="M0 0H256V256H0Z"/><path d="M34 144H58V126H74V166H92V118H103V85H124V98H143V88H158V111H171V127H153V141H127V129H111M135 141V157H148V173H163V160H178V145H195V158H222" fill="none" stroke="black" stroke-width="8" stroke-linejoin="miter"/></mask><linearGradient id="rainbow" gradientUnits="userSpaceOnUse" x1="45" y1="65" x2="211" y2="195"><stop offset="0.0000" stop-color="#E84258"/><stop offset="0.1667" stop-color="#EF7930"/><stop offset="0.3333" stop-color="#DAB42B"/><stop offset="0.5000" stop-color="#26A969"/><stop offset="0.6667" stop-color="#169FC0"/><stop offset="0.8333" stop-color="#4265DA"/><stop offset="1.0000" stop-color="#9854CB"/></linearGradient></defs>
+<g fill="url(#rainbow)"><path d="M128 24L218.067 76V180L128 232L37.933 180V76Z" mask="url(#signal)"/></g>
+</svg>

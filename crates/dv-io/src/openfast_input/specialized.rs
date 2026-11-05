@@ -130,7 +130,7 @@ impl FastInputFile {
         Ok(s)
     }
     pub(super) fn read_ad14(&mut self, lines: &[&str]) -> Result<bool, IoError> {
-        if lines.len() < 14 {
+        if lines.len() < 15 {
             return Ok(false);
         }
         let n = lines[2]

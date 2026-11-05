@@ -351,8 +351,8 @@ pub fn csd_with_window(
     let fft = FftPlanner::<f64>::new().plan_fft_forward(nfft);
     let mut scratch = vec![Complex::new(0.0, 0.0); fft.get_inplace_scratch_len()];
     for start in (0..=length - nseg).step_by(nseg - overlap) {
-        for i in 0..nseg {
-            sa[i] = x.get(start + i).copied().unwrap_or(0.0);
+        for (i, sample) in sa.iter_mut().enumerate() {
+            *sample = x.get(start + i).copied().unwrap_or(0.0);
         }
         detrend_in_place(&mut sa, options.detrend);
         a.fill(Complex::new(0.0, 0.0));
@@ -365,8 +365,8 @@ pub fn csd_with_window(
                 values[i].re += a[i].norm_sqr();
             }
         } else {
-            for i in 0..nseg {
-                sb[i] = y.get(start + i).copied().unwrap_or(0.0);
+            for (i, sample) in sb.iter_mut().enumerate() {
+                *sample = y.get(start + i).copied().unwrap_or(0.0);
             }
             detrend_in_place(&mut sb, options.detrend);
             b.fill(Complex::new(0.0, 0.0));

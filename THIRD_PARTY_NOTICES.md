@@ -18,4 +18,11 @@ The magma, inferno, plasma and viridis scientific palettes were released under C
 
 ColorBrewer palette data: Copyright (c) 2002 Cynthia Brewer, Mark Harrower, and The Pennsylvania State University. Apache License 2.0; notices and complete terms are retained in `licenses/COLORBREWER.txt` and `licenses/APACHE-2.0.txt`.
 
-Rust dependencies remain under their respective package licenses; their sources are fetched through Cargo and are not vendored in this repository.
+## Bundled fonts and icons
+
+- Inter Regular and SemiBold, Copyright (c) 2016 The Inter Project Authors, are distributed under the SIL Open Font License 1.1; see `licenses/INTER-OFL.txt`. The bundled fonts are subsetted and their tabular figures are enabled.
+- JetBrains Mono Regular, Copyright 2020 The JetBrains Mono Project Authors, is distributed under the SIL Open Font License 1.1; see `licenses/JETBRAINS-MONO-OFL.txt`. The bundled font is subsetted.
+- Phosphor icons, Copyright (c) 2020–2021 Phosphor Icons, are distributed under the MIT License; see `licenses/PHOSPHOR-MIT.txt`. The regular icon font is bundled.
+- Phosphor icon codepoints are taken from egui-phosphor 0.14.0, Copyright (c) 2023 Romet Tagobert, under the MIT License; see `licenses/EGUI-PHOSPHOR-MIT.txt`.
+
+Rust dependencies remain under their respective package licenses; their sources are fetched through Cargo and are not vendored in this repository. Release archives include `licenses/RUST-DEPENDENCIES.txt`, which lists every Rust crate compiled into `rustDatView.exe` with its license texts.

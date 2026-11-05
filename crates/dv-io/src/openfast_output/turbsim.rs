@@ -4,6 +4,8 @@ use dv_core::{DataFrame, Field2D, FileObject, IoError, NamedFrame};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
+/// Mean and standard-deviation profiles for the three velocity components.
+pub type VerticalProfile = ([Vec<f64>; 3], [Vec<f64>; 3]);
 #[derive(Debug, Clone)]
 pub struct TurbSimOptions {
     pub header_only: bool,
@@ -180,10 +182,7 @@ impl TurbSimFile {
                 .collect()
         })
     }
-    pub fn vertical_profile(
-        &self,
-        mid_only: bool,
-    ) -> Result<([Vec<f64>; 3], [Vec<f64>; 3]), IoError> {
+    pub fn vertical_profile(&self, mid_only: bool) -> Result<VerticalProfile, IoError> {
         self.require_field()?;
         let mut means = std::array::from_fn(|_| vec![0.0; self.z.len()]);
         let mut stds = std::array::from_fn(|_| vec![0.0; self.z.len()]);
@@ -276,12 +275,12 @@ impl TurbSimFile {
             } else {
                 self.line(iy, i)
             };
-            for k in 0..3 {
+            for (k, channel) in out.iter_mut().enumerate() {
                 let a = &base[k];
                 let b = &other[k];
                 let ma = mean(a);
                 let mb = mean(b);
-                out[k][i] = a
+                channel[i] = a
                     .iter()
                     .zip(b)
                     .map(|(x, y)| (x - ma) * (y - mb))

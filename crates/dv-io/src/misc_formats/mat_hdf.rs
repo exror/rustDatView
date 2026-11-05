@@ -5,19 +5,35 @@ use dv_core::IoError;
 use hdf5_reader::{group::Group, Dataset, Datatype};
 use std::{collections::BTreeMap, path::Path};
 
-#[derive(Clone)]
-enum Object {
-    Dataset(Dataset),
-    Group(Group),
+#[derive(Clone, Copy)]
+enum Object<'a> {
+    Dataset(&'a Dataset),
+    Group(&'a Group),
 }
-fn index(group: &Group, objects: &mut BTreeMap<u64, Object>) -> Result<(), IoError> {
-    objects.insert(group.address(), Object::Group(group.clone()));
+
+#[derive(Default)]
+struct Objects {
+    datasets: BTreeMap<u64, Dataset>,
+    groups: BTreeMap<u64, Group>,
+}
+
+impl Objects {
+    fn get(&self, address: &u64) -> Option<Object<'_>> {
+        self.datasets
+            .get(address)
+            .map(Object::Dataset)
+            .or_else(|| self.groups.get(address).map(Object::Group))
+    }
+}
+
+fn index(group: &Group, objects: &mut Objects) -> Result<(), IoError> {
+    objects.groups.insert(group.address(), group.clone());
     let (groups, datasets) = group.members().map_err(broken)?;
     for dataset in datasets {
-        objects.insert(dataset.address(), Object::Dataset(dataset));
+        objects.datasets.insert(dataset.address(), dataset);
     }
     for child in groups {
-        if !objects.contains_key(&child.address()) {
+        if !objects.groups.contains_key(&child.address()) {
             index(&child, objects)?;
         }
     }
@@ -25,7 +41,7 @@ fn index(group: &Group, objects: &mut BTreeMap<u64, Object>) -> Result<(), IoErr
 }
 fn references(
     dataset: &Dataset,
-    objects: &BTreeMap<u64, Object>,
+    objects: &Objects,
     stack: &mut Vec<u64>,
 ) -> Result<Vec<MatValue>, IoError> {
     let Datatype::Reference { size, .. } = dataset.dtype() else {
@@ -48,13 +64,13 @@ fn references(
             let object = objects
                 .get(&address)
                 .ok_or_else(|| broken("MATLAB reference points outside the object tree"))?;
-            decode(object, objects, stack)
+            decode(&object, objects, stack)
         })
         .collect()
 }
 fn decode(
-    object: &Object,
-    objects: &BTreeMap<u64, Object>,
+    object: &Object<'_>,
+    objects: &Objects,
     stack: &mut Vec<u64>,
 ) -> Result<MatValue, IoError> {
     let address = match object {
@@ -72,8 +88,8 @@ fn decode(
     result
 }
 fn decode_inner(
-    object: &Object,
-    objects: &BTreeMap<u64, Object>,
+    object: &Object<'_>,
+    objects: &Objects,
     stack: &mut Vec<u64>,
 ) -> Result<MatValue, IoError> {
     match object {
@@ -182,12 +198,12 @@ fn decode_inner(
                 return Err(IoError::Other(format!("unsupported MATLAB v7.3 group class `{class}` (including sparse/object values)")));
             }
             let (groups, datasets) = g.members().map_err(broken)?;
-            let mut members: Vec<(String, Object)> = groups
-                .into_iter()
+            let mut members: Vec<(String, Object<'_>)> = groups
+                .iter()
                 .map(|g| (g.name().to_owned(), Object::Group(g)))
                 .chain(
                     datasets
-                        .into_iter()
+                        .iter()
                         .map(|d| (d.name().to_owned(), Object::Dataset(d))),
                 )
                 .collect();
@@ -223,14 +239,14 @@ fn decode_inner(
 pub(super) fn read(path: &Path) -> Result<BTreeMap<String, MatValue>, IoError> {
     let file = hdf::open(path)?;
     let root = file.root_group().map_err(broken)?;
-    let mut objects = BTreeMap::new();
+    let mut objects = Objects::default();
     index(&root, &mut objects)?;
     let (groups, datasets) = root.members().map_err(broken)?;
     let mut values = BTreeMap::new();
     for object in groups
-        .into_iter()
+        .iter()
         .map(Object::Group)
-        .chain(datasets.into_iter().map(Object::Dataset))
+        .chain(datasets.iter().map(Object::Dataset))
     {
         let name = match &object {
             Object::Dataset(d) => d.name(),

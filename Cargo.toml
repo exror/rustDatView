@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 license = "MIT"
 
@@ -12,6 +12,7 @@ dv-core = { path = "crates/dv-core" }
 dv-tools = { path = "crates/dv-tools" }
 dv-io = { path = "crates/dv-io" }
 dv-plot = { path = "crates/dv-plot" }
+dv-chart = { path = "crates/dv-chart" }
 chrono = "0.4"
 regex = "1"
 thiserror = "1"
@@ -20,3 +21,16 @@ serde_json = "1"
 
 [profile.dev.package."*"]
 opt-level = 2
+
+[profile.release]
+lto = "thin"
+strip = true
+codegen-units = 1
+
+# Optimized but quick to rebuild; for interactive UI iteration, not distribution.
+[profile.fast]
+inherits = "release"
+lto = false
+strip = false
+codegen-units = 16
+incremental = true

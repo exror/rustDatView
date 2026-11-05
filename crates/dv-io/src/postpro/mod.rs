@@ -468,7 +468,7 @@ pub fn spanwise_concat(df: &DataFrame) -> Result<DataFrame> {
         Column::float(
             "i_[-]",
             (1..=nodes)
-                .flat_map(|i| std::iter::repeat(i as f64).take(time.len()))
+                .flat_map(|i| std::iter::repeat_n(i as f64, time.len()))
                 .collect(),
         ),
     ];

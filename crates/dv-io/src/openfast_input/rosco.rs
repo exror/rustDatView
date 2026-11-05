@@ -201,6 +201,15 @@ impl FileObject for RoscoDisconFile {
     }
 }
 
+pub(crate) fn looks_like_rosco_performance(text: &str) -> bool {
+    text.lines()
+        .take(12)
+        .any(|line| line.contains("Pitch angle") && !line.contains("TSR vector"))
+        && text
+            .lines()
+            .any(|line| line.contains("TSR vector") && !line.contains("Pitch angle"))
+}
+
 #[derive(Debug, Clone)]
 pub struct RoscoPerformanceFile {
     pub filename: PathBuf,
@@ -215,13 +224,23 @@ pub struct RoscoPerformanceFile {
 }
 impl RoscoPerformanceFile {
     pub fn read(path: &Path) -> Result<Self, IoError> {
+        if !crate::registry::text_prefix(path)?
+            .as_deref()
+            .is_some_and(looks_like_rosco_performance)
+        {
+            return Err(IoError::WrongFormat(
+                "ROSCO pitch and TSR vectors not found".into(),
+            ));
+        }
         Self::parse(path, &read_text(path)?)
     }
     pub fn parse(path: &Path, text: &str) -> Result<Self, IoError> {
-        let lines: Vec<_> = text.lines().collect();
-        if !lines.iter().take(12).any(|l| l.contains("Pitch angle")) {
-            return Err(IoError::WrongFormat("ROSCO pitch vector not found".into()));
+        if !looks_like_rosco_performance(text) {
+            return Err(IoError::WrongFormat(
+                "ROSCO pitch and TSR vectors not found".into(),
+            ));
         }
+        let lines: Vec<_> = text.lines().collect();
         let mut f = Self {
             filename: path.into(),
             name: String::new(),

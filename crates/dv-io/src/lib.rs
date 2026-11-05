@@ -12,6 +12,6 @@ pub mod postpro;
 pub mod registry;
 
 pub use registry::{
-    all_formats, detect_format, find_format, read_file, write_dataframe, writers, FileFormat,
-    Writer,
+    all_formats, detect_format, find_format, read_file, read_file_with_csv_options,
+    write_dataframe, writers, FileFormat, Writer,
 };

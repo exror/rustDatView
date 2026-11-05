@@ -1,0 +1,34 @@
+name: Release binaries
+on:
+  push:
+    branches: ['release/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    name: windows-x86_64
+    runs-on: windows-2022
+    env:
+      LZMA_API_STATIC: '1'
+      RUSTFLAGS: '-C target-feature=+crt-static'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: cargo test --workspace --locked --target x86_64-pc-windows-msvc
+      - run: cargo build --release -p datview --locked --target x86_64-pc-windows-msvc
+      - name: Collect Rust dependency licenses
+        run: python .github/scripts/rust_licenses.py
+      - name: Package and smoke-test the executable
+        run: python .github/scripts/package_release.py --target x86_64-pc-windows-msvc
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustDatView-windows-x86_64
+          path: target/release-assets/*
+          if-no-files-found: error
+          retention-days: 14
