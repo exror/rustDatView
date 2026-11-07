@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Documentation: a [user guide](docs/USER_GUIDE.md) covering every feature, setting and shortcut, and a [quick start](docs/QUICK_START.md) touring the features that save the most manual work.
+- The release archive includes the documentation and `nvidia-smi-two-gpus.csv`, an nvidia-smi log with two GPUs that is split into one source per card when opened.
+
 ## 1.0.0
 
 A complete redesign around one idea: open a log and immediately see something worth reading.

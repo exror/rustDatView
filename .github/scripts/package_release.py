@@ -18,6 +18,7 @@ EXAMPLES = (
     'cpu-benchmark-performance.csv',
     'motherboard-power.csv',
     'signals.csv',
+    'nvidia-smi-two-gpus.csv',
     'field_lzma.vti',
 )
 
@@ -50,6 +51,7 @@ def main():
         if not (repo / 'licenses' / 'RUST-DEPENDENCIES.txt').is_file():
             raise RuntimeError('Run .github/scripts/rust_licenses.py before packaging')
         shutil.copytree(repo / 'licenses', root / 'licenses')
+        shutil.copytree(repo / 'docs', root / 'docs')
         examples = root / 'examples'
         examples.mkdir()
         for filename in EXAMPLES:

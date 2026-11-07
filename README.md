@@ -15,9 +15,14 @@ It is a ground-up Rust re-imagining of [pyDatView](https://github.com/ebranlard/
 
 ## Download
 
-Windows 10/11 (x64): download `rustDatView-…-windows-x86_64.zip` from [Releases](https://github.com/exror/rustDatView/releases), extract it and run `rustDatView.exe`. No installer, runtime, Python or Rust needed. The archive contains example files to try.
+Windows 10/11 (x64): download `rustDatView-…-windows-x86_64.zip` from [Releases](https://github.com/exror/rustDatView/releases), extract it and run `rustDatView.exe`. No installer, runtime, Python or Rust needed. The archive contains example files to try and this documentation.
 
 The executable is not code-signed, so SmartScreen may ask for confirmation the first time. Compare the archive with `SHA256SUMS.txt` from the release if you want to verify it.
+
+## Documentation
+
+- [Quick start](docs/QUICK_START.md): a ten-minute tour of what rustDatView does for you, using the example files.
+- [User guide](docs/USER_GUIDE.md): every feature, option, setting and shortcut.
 
 ## The everyday loop
 
