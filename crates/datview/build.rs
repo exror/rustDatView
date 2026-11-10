@@ -5,8 +5,8 @@ fn main() {
         return;
     }
     // Windows 11 24H2 and later skip the console window when the app is
-    // started from Explorer (see the manifest). link.exe merges it with the
-    // toolchain's default manifest. MinGW always links its own default
+    // started from Explorer (see the manifest, which link.exe embeds in place
+    // of the toolchain's default one). MinGW always links its own default
     // manifest, so GNU builds rely on the fallback in `main.rs` instead.
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
         let manifest =

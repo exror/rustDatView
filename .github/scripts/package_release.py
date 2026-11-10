@@ -46,10 +46,13 @@ def main():
         actual = run(str(binary), '--version').strip()
         if actual != f'rustDatView {version}':
             raise RuntimeError(f'Incorrect release version: {actual}')
-        # Without this, Windows opens a console window next to the app when it
-        # is started from Explorer (Windows 11 24H2 and later honour it).
-        if b'consoleAllocationPolicy' not in binary.read_bytes():
-            raise RuntimeError('The executable is missing its console allocation manifest')
+        # The embedded manifest keeps long path support and stops Windows from
+        # opening a console window next to the app when it is started from
+        # Explorer (Windows 11 24H2 and later honour the console setting).
+        data = binary.read_bytes()
+        for setting in (b'longPathAware', b'consoleAllocationPolicy'):
+            if setting not in data:
+                raise RuntimeError(f'The executable manifest is missing {setting.decode()}')
         for filename in ('README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'CHANGELOG.md'):
             shutil.copy2(repo / filename, root / filename)
         if not (repo / 'licenses' / 'RUST-DEPENDENCIES.txt').is_file():
