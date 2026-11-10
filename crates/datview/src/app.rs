@@ -250,15 +250,9 @@ impl DatView {
     /// Separate recordings opened together are compared from their starts.
     /// Overlapping recordings (simultaneous loggers) keep absolute time.
     fn align_separate_recordings(&mut self) {
-        let Some(indices) = self.workspace.separate_recordings() else {
+        let Some(keys) = align_recordings(&mut self.workspace) else {
             return;
         };
-        let mut keys = Vec::with_capacity(indices.len());
-        for index in indices {
-            let source = &mut self.workspace.sources[index];
-            source.align_start = true;
-            keys.push(source.stable_key());
-        }
         let count = keys.len();
         self.chart.fit_all();
         self.chart.selection = None;
@@ -302,46 +296,19 @@ impl DatView {
         self.workspace.rebuild();
     }
 
-    /// Logs that interleave several devices row by row (nvidia-smi, PTAT,
-    /// turbostat) zigzag between them when plotted. Newly opened ones are split
-    /// into one source per device, with an Undo in the notification.
+    /// Splits newly opened logs that interleave several devices, with an Undo
+    /// in the notification.
     fn split_interleaved(&mut self, new: std::ops::Range<usize>) {
-        for index in new.rev() {
-            let (Some(source), Some(table)) = (
-                self.workspace.sources.get(index),
-                self.workspace.tables.tabs.get(index),
-            ) else {
-                continue;
-            };
-            if source.recipe.is_some() || source.path.as_os_str().is_empty() {
-                continue;
-            }
-            let Some((column, devices)) =
-                ui::sidebar::interleaved_suggestion(table, self.workspace.x_key.as_deref())
-            else {
-                continue;
-            };
-            let parent = source.stable_key();
-            let name = source.name.clone();
-            let column_name = dv_core::units::split_name_unit(&table.data.column(column).name).0;
-            let before = self.workspace.sources.len();
-            match self.workspace.split_source(index, column) {
-                Ok(()) => {
-                    let parts = self.workspace.sources[before..]
-                        .iter()
-                        .map(|source| source.stable_key())
-                        .collect();
-                    self.toasts.push(Toast {
-                        message: format!(
-                            "{name} interleaves {devices} devices; split by {column_name}"
-                        ),
-                        error: false,
-                        created: Instant::now(),
-                        action: Some(ToastAction::UndoSplit { parent, parts }),
-                    });
-                }
-                Err(error) => self.workspace.problems.push(error),
-            }
+        for split in split_interleaved_sources(&mut self.workspace, new) {
+            self.toasts.push(Toast {
+                message: split.message,
+                error: false,
+                created: Instant::now(),
+                action: Some(ToastAction::UndoSplit {
+                    parent: split.parent,
+                    parts: split.parts,
+                }),
+            });
         }
         self.workspace.rebuild();
     }
@@ -863,7 +830,7 @@ impl DatView {
                         .zip(self.workspace.tables.tabs.first())
                     {
                         let rows = table.nrows();
-                        let channels = table.ncols().saturating_sub(1);
+                        let channels = crate::channels::channel_count(table);
                         let mut summary = format!(
                             "{}  ·  {} {}  ·  {} {}",
                             source.name,
@@ -2044,6 +2011,71 @@ fn format_count(value: usize) -> String {
     output
 }
 
+/// A source split into one source per device.
+struct InterleavedSplit {
+    parent: String,
+    parts: Vec<String>,
+    message: String,
+}
+
+/// Logs that interleave several devices row by row (nvidia-smi, PTAT,
+/// turbostat) zigzag between them when plotted. Splits the newly opened ones
+/// into one source per device, in the window and for `--export` alike.
+fn split_interleaved_sources(
+    workspace: &mut Workspace,
+    new: std::ops::Range<usize>,
+) -> Vec<InterleavedSplit> {
+    let mut splits = Vec::new();
+    for index in new.rev() {
+        let (Some(source), Some(table)) = (
+            workspace.sources.get(index),
+            workspace.tables.tabs.get(index),
+        ) else {
+            continue;
+        };
+        if source.recipe.is_some() || source.path.as_os_str().is_empty() {
+            continue;
+        }
+        let Some((column, devices)) =
+            ui::sidebar::interleaved_suggestion(table, workspace.x_key.as_deref())
+        else {
+            continue;
+        };
+        let parent = source.stable_key();
+        let name = source.name.clone();
+        let column_name = dv_core::units::split_name_unit(&table.data.column(column).name).0;
+        let before = workspace.sources.len();
+        match workspace.split_source(index, column) {
+            Ok(()) => splits.push(InterleavedSplit {
+                parent,
+                parts: workspace.sources[before..]
+                    .iter()
+                    .map(|source| source.stable_key())
+                    .collect(),
+                message: format!("{name} interleaves {devices} devices; split by {column_name}"),
+            }),
+            Err(error) => workspace.problems.push(error),
+        }
+    }
+    splits
+}
+
+/// Starts separate recordings opened together at zero so they can be
+/// compared; returns the keys of the aligned sources.
+fn align_recordings(workspace: &mut Workspace) -> Option<Vec<String>> {
+    let indices = workspace.separate_recordings()?;
+    Some(
+        indices
+            .into_iter()
+            .map(|index| {
+                let source = &mut workspace.sources[index];
+                source.align_start = true;
+                source.stable_key()
+            })
+            .collect(),
+    )
+}
+
 fn apply_indices(workspace: &mut Workspace, x: Option<usize>, ys: &[usize]) -> Result<(), String> {
     let table = workspace.tables.tabs.first().ok_or("No table was loaded")?;
     let columns = table.data.columns();
@@ -2131,6 +2163,7 @@ pub(crate) fn headless_export(launch: &Launch, path: &Path) -> Result<(), String
         workspace.pipeline = dv_plot::Pipeline::load(pipeline).map_err(|e| e.to_string())?;
     }
     if !launch.paths.is_empty() {
+        let first_new = workspace.sources.len();
         workspace.load(
             launch.paths.clone(),
             launch.session.is_some(),
@@ -2141,6 +2174,13 @@ pub(crate) fn headless_export(launch: &Launch, path: &Path) -> Result<(), String
             if workspace.loading.is_some() {
                 std::thread::sleep(Duration::from_millis(10));
             }
+        }
+        // The same automatic arrangement as opening the files in the window.
+        let new = first_new..workspace.sources.len();
+        split_interleaved_sources(&mut workspace, new);
+        if align_recordings(&mut workspace).is_some() {
+            chart.fit_all();
+            chart.selection = None;
         }
     }
     if !workspace.problems.is_empty() {

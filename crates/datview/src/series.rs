@@ -1,4 +1,5 @@
 use crate::{
+    channels::display_name,
     panes,
     workspace::{Mode, Source, Workspace},
 };
@@ -167,8 +168,8 @@ fn build_plot(
     let mut plot = PlotData::from_columns(
         x,
         ColumnData::Float(y),
-        table.data.column(ix).name.clone(),
-        table.data.column(iy).name.clone(),
+        display_name(&table.data.column(ix).name),
+        display_name(&table.data.column(iy).name),
     )
     .map_err(|e| e.to_string())?;
     plot.st = source.name.clone();
@@ -207,11 +208,14 @@ fn finish(
     let channel_label = channel
         .map(|channel| channel.label.clone())
         .unwrap_or_else(|| label.clone());
+    // One spelling per unit everywhere: `degC` and `°C` both show as `°C`.
+    let unit = parse_unit(&unit);
     // Spectra and distributions change the unit (W²/Hz, 1/W) but should stay
     // grouped with the physical quantity they were computed from.
     let family = channel
         .map(|channel| channel.family.clone())
-        .unwrap_or_else(|| parse_unit(&unit).family.to_string());
+        .unwrap_or_else(|| unit.family.to_string());
+    let unit = unit.symbol;
     if workspace.sources.iter().filter(|s| s.active).count() > 1 && workspace.mode != Mode::Compare
     {
         if let Some(tag) = workspace.source_tags().get(source_index) {
@@ -374,7 +378,7 @@ impl Workspace {
                                 key,
                                 label,
                                 unit,
-                                table.data.column(ix).name.clone(),
+                                display_name(&table.data.column(ix).name),
                                 x,
                                 y,
                                 datetime,

@@ -256,7 +256,7 @@ fn source_summary(table: &Table, x_key: Option<&str>, precision: usize) -> Strin
     let mut summary = format!(
         "{} rows · {} ch",
         count(table.nrows()),
-        count(table.ncols().saturating_sub(1))
+        count(crate::channels::channel_count(table))
     );
     let Some(column) = x_key.and_then(|key| {
         table
@@ -898,15 +898,22 @@ impl Sidebar {
                 ));
             }
         }
+        // Count what the list can show: the index channel is hidden unless
+        // the user asks for it.
+        let listed = |channel: &crate::channels::Channel| {
+            self.show_index || !crate::selection::is_index(&channel.original)
+        };
+        let total = workspace.channels.iter().filter(|c| listed(c)).count();
+        let selected = workspace
+            .channels
+            .iter()
+            .filter(|c| listed(c) && workspace.selected.contains(&c.key))
+            .count();
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new(format!(
-                    "{} of {} selected",
-                    workspace.selected.len(),
-                    workspace.channels.len()
-                ))
-                .size(11.0)
-                .color(tokens.text_muted),
+                egui::RichText::new(format!("{selected} of {total} selected"))
+                    .size(11.0)
+                    .color(tokens.text_muted),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.menu_button(

@@ -313,8 +313,8 @@ impl FormulaDialog {
                             ui.painter()
                                 .add(egui::Shape::line(points, egui::Stroke::new(1.5, accent)));
                         }
-                        let unit = self.unit.trim();
-                        let value = |v: f64| dv_chart::format::format_value(v, unit, 4);
+                        let unit = dv_core::units::parse_unit(&self.unit).symbol;
+                        let value = |v: f64| dv_chart::format::format_value(v, &unit, 4);
                         let mut text = format!(
                             "min {}   ·   mean {}   ·   max {}",
                             value(preview.min),

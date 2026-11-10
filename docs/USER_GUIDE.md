@@ -117,7 +117,7 @@ Everything the reader decided (encoding, separator, skipped lines, merged column
 
 ### Units
 
-Units decide pane grouping, statistics units, energy and comparisons. rustDatView recognises SI prefixes and the families power (W), voltage (V), current (A), frequency (Hz), temperature (°C, K, °F, also written `degC`, `C`, `celsius`…), percent, fan speed (rpm), data (B, with SI or IEC prefixes such as MiB), throughput (B/s), time (s, min, h, d), energy (J, Wh), charge (A·s, Ah), frame rate (fps) and flags (Yes/No). Other units are kept as written.
+Units decide pane grouping, statistics units, energy and comparisons. rustDatView recognises SI prefixes and the families power (W), voltage (V), current (A), frequency (Hz), temperature (°C, K, °F, also written `degC`, `C`, `celsius`…), percent, fan speed (rpm), data (B, with SI or IEC prefixes such as MiB), throughput (B/s), time (s, min, h, d), energy (J, Wh), charge (A·s, Ah), frame rate (fps) and flags (Yes/No). A recognised unit is shown in one spelling everywhere, whatever the file wrote: `degC` and `C` appear as °C, `RPM` as rpm. Other units are kept as written.
 
 ## Sources
 
@@ -573,7 +573,7 @@ See [Copying](#copying) under Statistics.
 
 ### Without a window
 
-`--export PATH` renders a figure (`.png`, `.svg`, `.pdf`, `.eps`) or a Python script (`.py`) and exits. See [Command line](#command-line).
+`--export PATH` renders a figure (`.png`, `.svg`, `.pdf`, `.eps`) or a Python script (`.py`) and exits. Files are arranged as they are in the window: interleaved devices are split and separate recordings are aligned at their start. See [Command line](#command-line).
 
 ## Sessions
 
@@ -684,7 +684,7 @@ Open with format…, Open session…, Export Python script…, Follow file chang
 
 ## Limitations
 
-- `--export` does not split interleaved devices or align separate recordings, and it uses default preferences (colours, line width, digits) and default figure options (PNG size 1600 × 1000, light). To export an arranged view, save a session and use `--session`.
+- `--export` uses default preferences (colours, line width, digits) and default figure options (PNG size 1600 × 1000, light). To export an arranged view, save a session and use `--session`.
 - `--export` fails if loading reports any problem, including warnings that the window would only show as a notification.
 - `--dayfirst` is stored in Settings; turn **Day first when ambiguous** off again to undo it.
 - Energy is only computed in Signals mode with a time X axis and a power unit.

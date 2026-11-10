@@ -4,6 +4,9 @@
 
 - Documentation: a [user guide](docs/USER_GUIDE.md) covering every feature, setting and shortcut, and a [quick start](docs/QUICK_START.md) touring the features that save the most manual work.
 - The release archive includes the documentation and `nvidia-smi-two-gpus.csv`, an nvidia-smi log with two GPUs that is split into one source per card when opened.
+- Units are shown in one spelling everywhere. The sidebar, legend values, Table view headers and spectrum units used the file's spelling (`degC`, `RPM`) while pane titles and statistics showed `°C` and `rpm`.
+- Channel counts match the channel list. The sidebar counter included the hidden index column, and the source card and status bar counted text columns, which cannot be plotted.
+- `--export` arranges files as the window does: interleaved devices are split into one source per device and separate recordings are aligned at their start.
 
 ## 1.0.0
 

@@ -19,7 +19,7 @@ pub(crate) fn catalog(tables: &dv_core::TableList) -> Vec<Channel> {
     let mut result = Vec::new();
     for table in &tables.tabs {
         for column in table.data.columns() {
-            if !(column.is_float() || column.is_datetime()) {
+            if !is_channel(column) {
                 continue;
             }
             let key = clean_col(&column.name);
@@ -27,21 +27,48 @@ pub(crate) fn catalog(tables: &dv_core::TableList) -> Vec<Channel> {
                 continue;
             }
             let (label, unit) = split_name_unit(&column.name);
+            let unit = parse_unit(&unit);
             let family = if column.is_datetime() {
                 dv_core::units::UnitFamily::Time.to_string()
             } else {
-                parse_unit(&unit).family.to_string()
+                unit.family.to_string()
             };
             result.push(Channel {
                 key,
                 label,
-                unit,
+                unit: unit.symbol,
                 family,
                 original: column.name.clone(),
             });
         }
     }
     result
+}
+
+/// Numeric and timestamp columns can be plotted; text columns cannot.
+fn is_channel(column: &dv_core::Column) -> bool {
+    column.is_float() || column.is_datetime()
+}
+
+/// The plottable channels of one table, without its row index.
+pub(crate) fn channel_count(table: &dv_core::Table) -> usize {
+    table
+        .data
+        .columns()
+        .iter()
+        .filter(|column| is_channel(column) && !crate::selection::is_index(&column.name))
+        .count()
+}
+
+/// A column name with its unit as displayed everywhere else (`Coolant [degC]`
+/// becomes `Coolant [°C]`), so derived labels such as `PSD(Coolant) [°C²/Hz]`
+/// match the sidebar, legend and statistics.
+pub(crate) fn display_name(name: &str) -> String {
+    let (label, unit) = split_name_unit(name);
+    if unit.is_empty() {
+        return name.to_owned();
+    }
+    format!("{label} [{}]", parse_unit(&unit).symbol)
 }
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -211,5 +238,26 @@ mod tests {
         }]);
         assert!(c.search("power").is_empty());
         assert_eq!(c.search("mhz"), vec![0]);
+    }
+    #[test]
+    fn units_have_one_spelling_and_counts_skip_index_and_text() {
+        let data = dv_core::DataFrame::from_columns(vec![
+            dv_core::Column::float("Time [s]", vec![0.0, 0.5]),
+            dv_core::Column::float("Coolant In [degC]", vec![30.0, 31.0]),
+            dv_core::Column::float("Pump Speed [RPM]", vec![1800.0, 1810.0]),
+            dv_core::Column::float("Gizmo Level [zz]", vec![3.0, 3.1]),
+            dv_core::Column::string("Mode", vec!["Quiet".into(), "Boost".into()]),
+        ])
+        .unwrap();
+        let table = dv_core::Table::from_df(data, "log");
+        assert_eq!(channel_count(&table), 4);
+        let units: Vec<_> = catalog(&dv_core::TableList::new(vec![table]))
+            .into_iter()
+            .filter(|channel| !crate::selection::is_index(&channel.original))
+            .map(|channel| channel.unit)
+            .collect();
+        assert_eq!(units, ["s", "°C", "rpm", "zz"]);
+        assert_eq!(display_name("Coolant In [degC]"), "Coolant In [°C]");
+        assert_eq!(display_name("Sensor [0]"), "Sensor [0]");
     }
 }

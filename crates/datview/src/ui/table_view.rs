@@ -206,7 +206,7 @@ impl TableView {
                                         RichText::new(if unit.is_empty() {
                                             " ".to_owned()
                                         } else {
-                                            unit
+                                            dv_core::units::parse_unit(&unit).symbol
                                         })
                                         .size(11.0)
                                         .color(tokens.text_muted),
