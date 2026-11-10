@@ -1,676 +1,851 @@
-//! Vector figure construction shared by SVG, PNG, PDF and EPS exports.
-use crate::app::presentation::Annotation;
-use serde::{Deserialize, Serialize};
-use std::{fmt::Write as _, path::Path};
+//! Figure output through the same chart layout and drawing engine as the UI.
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, LazyLock},
+};
 
-#[derive(Clone)]
-pub struct Curve {
-    pub name: String,
-    pub sx: String,
-    pub sy: String,
-    pub points: Vec<[f64; 2]>,
+use dv_chart::{ChartState, FontSet};
+use eframe::egui::{self, Color32, ColorImage};
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    settings::Settings,
+    ui::{
+        chart_view::{self, ChartOptions},
+        theme,
+    },
+    workspace::Workspace,
+};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum FigureFormat {
+    #[default]
+    Png,
+    Svg,
+    Pdf,
+    Eps,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+impl FigureFormat {
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Svg => "svg",
+            Self::Pdf => "pdf",
+            Self::Eps => "eps",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Png => "PNG",
+            Self::Svg => "SVG",
+            Self::Pdf => "PDF",
+            Self::Eps => "EPS",
+        }
+    }
+
+    fn from_path(path: &Path) -> Result<Self, String> {
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("");
+        if extension.eq_ignore_ascii_case("png") {
+            Ok(Self::Png)
+        } else if extension.eq_ignore_ascii_case("svg") {
+            Ok(Self::Svg)
+        } else if extension.eq_ignore_ascii_case("pdf") {
+            Ok(Self::Pdf)
+        } else if extension.eq_ignore_ascii_case("eps") {
+            Ok(Self::Eps)
+        } else {
+            Err("Choose an SVG, PNG, PDF or EPS filename.".into())
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum FigureTheme {
+    #[default]
+    Light,
+    Dark,
+    MatchApp,
+}
+
+impl FigureTheme {
+    fn is_dark(self, app_dark: bool) -> bool {
+        match self {
+            Self::Light => false,
+            Self::Dark => true,
+            Self::MatchApp => app_dark,
+        }
+    }
+}
+
+/// Portable figure preferences, kept independently of the interactive view.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct Style {
-    pub log_x: bool,
-    pub log_y: bool,
-    pub flip_x: bool,
-    pub flip_y: bool,
-    pub subplots: bool,
-    pub share_x: bool,
-    pub grid: bool,
-    pub legend: bool,
-    pub lines: bool,
-    pub markers: bool,
-    pub step: bool,
-    pub width: f32,
-    pub marker_size: f32,
+pub(crate) struct FigureOptions {
+    pub format: FigureFormat,
+    pub width: u32,
+    pub height: u32,
+    pub scale: u32,
+    pub theme: FigureTheme,
+    pub transparent: bool,
+    pub include_legend: bool,
+    pub include_title: bool,
+    pub include_annotations: bool,
+    pub include_selection: bool,
     pub title: String,
+    pub subtitle: String,
     pub x_label: String,
     pub y_label: String,
-    pub limits: Option<[f64; 4]>,
-    pub figure_width: u32,
-    pub figure_height: u32,
-    pub font_family: String,
-    pub font_size: f32,
 }
-impl Default for Style {
+
+impl Default for FigureOptions {
     fn default() -> Self {
         Self {
-            log_x: false,
-            log_y: false,
-            flip_x: false,
-            flip_y: false,
-            subplots: false,
-            share_x: true,
-            grid: true,
-            legend: true,
-            lines: true,
-            markers: false,
-            step: false,
-            width: 2.0,
-            marker_size: 3.0,
+            format: FigureFormat::Png,
+            width: 1600,
+            height: 1000,
+            scale: 1,
+            theme: FigureTheme::Light,
+            transparent: false,
+            include_legend: true,
+            include_title: true,
+            include_annotations: true,
+            include_selection: false,
             title: String::new(),
+            subtitle: String::new(),
             x_label: String::new(),
             y_label: String::new(),
-            limits: None,
-            figure_width: 1200,
-            figure_height: 800,
-            font_family: String::new(),
-            font_size: 14.0,
         }
     }
 }
 
-pub fn axis(value: f64, log: bool) -> f64 {
-    if log {
-        if value > 0.0 {
-            value.log10()
-        } else {
-            f64::NAN
+fn fonts() -> &'static FontSet {
+    static FONTS: LazyLock<FontSet> = LazyLock::new(|| FontSet {
+        regular: Arc::from(theme::INTER_REGULAR),
+        semibold: Arc::from(theme::INTER_SEMIBOLD),
+        mono: Arc::from(theme::JETBRAINS_MONO),
+        family: "Inter".into(),
+    });
+    &FONTS
+}
+fn dimensions(figure: &FigureOptions) -> Result<[u32; 2], String> {
+    let width = figure
+        .width
+        .checked_mul(figure.scale)
+        .ok_or("Figure width is too large.")?;
+    let height = figure
+        .height
+        .checked_mul(figure.scale)
+        .ok_or("Figure height is too large.")?;
+    if width == 0 || height == 0 {
+        return Err("Figure dimensions and scale must be greater than zero.".into());
+    }
+    // This also bounds the memory used by the raster and EPS encoders.
+    if width > 32_768 || height > 32_768 || u64::from(width) * u64::from(height) > 100_000_000 {
+        return Err("Figure is too large. Reduce the dimensions or scale.".into());
+    }
+    Ok([width, height])
+}
+
+fn figure_svg(
+    workspace: &Workspace,
+    state: &ChartState,
+    settings: &Settings,
+    chart: &ChartOptions,
+    figure: &FigureOptions,
+    app_dark: bool,
+    format: FigureFormat,
+) -> Result<String, String> {
+    let [width, height] = dimensions(figure)?;
+    let mut chart = chart.clone();
+    chart.legend = figure.include_legend;
+    // A static figure has no hover, so legends need no room for live values.
+    chart.legend_values = false;
+    chart.crosshair = false;
+    chart.tooltip = false;
+    if figure.include_title {
+        if !figure.title.is_empty() {
+            chart.title.clone_from(&figure.title);
+        }
+        if !figure.subtitle.is_empty() {
+            chart.subtitle.clone_from(&figure.subtitle);
         }
     } else {
-        value
+        chart.title.clear();
+        chart.subtitle.clear();
     }
-}
-pub fn display_points(curve: &Curve, style: &Style) -> Vec<[f64; 2]> {
-    let mut out = Vec::with_capacity(curve.points.len() * if style.step { 2 } else { 1 });
-    let mut previous: Option<[f64; 2]> = None;
-    for &[x, y] in &curve.points {
-        let p = [axis(x, style.log_x), axis(y, style.log_y)];
-        if style.step {
-            if let Some(prev) = previous {
-                out.push([p[0], prev[1]]);
+    if !figure.x_label.is_empty() {
+        chart.x_label.clone_from(&figure.x_label);
+    }
+    if !figure.y_label.is_empty() {
+        chart.y_label.clone_from(&figure.y_label);
+    }
+
+    // Copy only persistent state, not the potentially large decimation caches.
+    let mut view = state.persistent_snapshot();
+    if !figure.include_selection {
+        view.selection = None;
+    }
+    let dark = figure.theme.is_dark(app_dark);
+    let svg = chart_view::with_chart(
+        workspace,
+        settings,
+        &chart,
+        dark,
+        figure.include_annotations,
+        |panes, config, marks, theme| {
+            let mut theme = theme.clone();
+            if figure.transparent && matches!(format, FigureFormat::Png | FigureFormat::Svg) {
+                theme.surface = Color32::TRANSPARENT;
+                theme.bg = Color32::TRANSPARENT;
             }
-        }
-        out.push(p);
-        previous = Some(p);
+            dv_chart::render_svg(
+                panes,
+                &view,
+                config,
+                marks,
+                &theme,
+                fonts(),
+                [figure.width as f32, figure.height as f32],
+            )
+        },
+    );
+    if figure.scale == 1 {
+        Ok(svg)
+    } else {
+        // Scale the whole drawing, including text and strokes, not just its canvas.
+        Ok(format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {} {}\">{svg}</svg>",
+            figure.width, figure.height
+        ))
     }
-    out
-}
-pub fn color(index: usize) -> [u8; 3] {
-    const COLORS: [[u8; 3]; 10] = [
-        [31, 119, 180],
-        [255, 127, 14],
-        [44, 160, 44],
-        [214, 39, 40],
-        [148, 103, 189],
-        [140, 86, 75],
-        [227, 119, 194],
-        [127, 127, 127],
-        [188, 189, 34],
-        [23, 190, 207],
-    ];
-    COLORS[index % COLORS.len()]
-}
-pub fn bounds(curves: &[Curve], style: &Style) -> [f64; 4] {
-    if let Some([x0, x1, y0, y1]) = style.limits {
-        return [
-            axis(x0, style.log_x),
-            axis(x1, style.log_x),
-            axis(y0, style.log_y),
-            axis(y1, style.log_y),
-        ];
-    }
-    let mut b = [
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-    ];
-    for c in curves {
-        for &[x, y] in &c.points {
-            let (x, y) = (axis(x, style.log_x), axis(y, style.log_y));
-            if x.is_finite() && y.is_finite() {
-                b[0] = b[0].min(x);
-                b[1] = b[1].max(x);
-                b[2] = b[2].min(y);
-                b[3] = b[3].max(y);
-            }
-        }
-    }
-    for i in [0, 2] {
-        if !b[i].is_finite() {
-            b[i] = 0.0;
-            b[i + 1] = 1.0;
-        }
-        let pad = if b[i] == b[i + 1] {
-            b[i].abs().max(1.0) * 0.05
-        } else {
-            (b[i + 1] - b[i]) * 0.03
-        };
-        b[i] -= pad;
-        b[i + 1] += pad;
-    }
-    b
 }
 
-#[derive(Clone)]
-enum Element {
-    Path(Vec<[f64; 2]>, [u8; 3], f32),
-    Text(f64, f64, String, f32),
-    Circle(f64, f64, f32, [u8; 3]),
-    Rect(f64, f64, f64, f64, [u8; 3], f32),
-}
-struct Figure {
-    width: u32,
-    height: u32,
-    elements: Vec<Element>,
-    font_family: String,
-    font_size: f32,
-}
-impl Figure {
-    fn build(curves: &[Curve], s: &Style, annotations: &[&Annotation]) -> Result<Self, String> {
-        if curves.is_empty() {
-            return Err("No plotted curves to export".into());
-        }
-        if s.figure_width < 200 || s.figure_height < 150 {
-            return Err("Figure dimensions must be at least 200 × 150".into());
-        }
-        let mut fig = Self {
-            width: s.figure_width,
-            height: s.figure_height,
-            elements: Vec::new(),
-            font_family: if s.font_family.is_empty() {
-                "sans-serif".into()
-            } else {
-                s.font_family.clone()
-            },
-            font_size: s.font_size,
-        };
-        let count = if s.subplots { curves.len() } else { 1 };
-        let h = s.figure_height as f64 / count as f64;
-        if h < 100.0 {
-            return Err("Increase figure height for this many subplots".into());
-        }
-        let global = bounds(curves, s);
-        for panel in 0..count {
-            let subset = if s.subplots {
-                &curves[panel..panel + 1]
-            } else {
-                curves
-            };
-            let mut b = bounds(subset, s);
-            if s.share_x {
-                b[0] = global[0];
-                b[1] = global[1];
-            }
-            if !b.iter().all(|x| x.is_finite()) || b[0] >= b[1] || b[2] >= b[3] {
-                return Err("Invalid plot limits (logarithmic bounds must be positive)".into());
-            }
-            let (left, right, top, bottom) = (
-                90.0,
-                fig.width as f64 - 30.0,
-                panel as f64 * h + 35.0,
-                (panel + 1) as f64 * h - 65.0,
-            );
-            let map = |p: [f64; 2]| {
-                let mut x = (p[0] - b[0]) / (b[1] - b[0]);
-                let mut y = (p[1] - b[2]) / (b[3] - b[2]);
-                if s.flip_x {
-                    x = 1.0 - x;
-                }
-                if s.flip_y {
-                    y = 1.0 - y;
-                }
-                [left + x * (right - left), bottom - y * (bottom - top)]
-            };
-            for annotation in annotations {
-                if let Annotation::Region {
-                    x_axis,
-                    min,
-                    max,
-                    color,
-                    ..
-                } = annotation
-                {
-                    if *x_axis != subset[0].sx || !min.is_finite() || !max.is_finite() {
-                        continue;
-                    }
-                    let a = axis(min.min(*max), s.log_x).max(b[0]);
-                    let z = axis(min.max(*max), s.log_x).min(b[1]);
-                    if a.is_finite() && z.is_finite() && a < z {
-                        let a = map([a, b[2]])[0];
-                        let z = map([z, b[2]])[0];
-                        fig.elements.push(Element::Rect(
-                            a.min(z),
-                            top,
-                            (z - a).abs(),
-                            bottom - top,
-                            *color,
-                            0.15,
-                        ));
-                    }
-                }
-            }
-            for tick in 0..=5 {
-                let r = tick as f64 / 5.0;
-                let x = b[0] + r * (b[1] - b[0]);
-                let y = b[2] + r * (b[3] - b[2]);
-                let xp = map([x, b[2]])[0];
-                let yp = map([b[0], y])[1];
-                if s.grid {
-                    fig.elements.push(Element::Path(
-                        vec![[xp, top], [xp, bottom]],
-                        [220, 220, 220],
-                        0.6,
-                    ));
-                    fig.elements.push(Element::Path(
-                        vec![[left, yp], [right, yp]],
-                        [220, 220, 220],
-                        0.6,
-                    ));
-                }
-                fig.elements.push(Element::Text(
-                    xp - 20.0,
-                    bottom + 20.0,
-                    value_label(if s.log_x { 10f64.powf(x) } else { x }),
-                    11.0,
-                ));
-                fig.elements.push(Element::Text(
-                    4.0,
-                    yp + 4.0,
-                    value_label(if s.log_y { 10f64.powf(y) } else { y }),
-                    11.0,
-                ));
-            }
-            fig.elements.push(Element::Path(
-                vec![
-                    [left, top],
-                    [left, bottom],
-                    [right, bottom],
-                    [right, top],
-                    [left, top],
-                ],
-                [0, 0, 0],
-                1.0,
-            ));
-            let sx = if s.x_label.is_empty() {
-                &subset[0].sx
-            } else {
-                &s.x_label
-            };
-            let sy = if s.y_label.is_empty() {
-                &subset[0].sy
-            } else {
-                &s.y_label
-            };
-            fig.elements
-                .push(Element::Text(left, bottom + 45.0, sx.clone(), 13.0));
-            fig.elements.push(Element::Text(
-                left,
-                top - 12.0,
-                format!(
-                    "{}{}{}",
-                    s.title,
-                    if s.title.is_empty() { "" } else { " — " },
-                    sy
-                ),
-                14.0,
-            ));
-            for (local, c) in subset.iter().enumerate() {
-                let index = if s.subplots { panel } else { local };
-                let rgb = color(index);
-                let pts = display_points(c, s);
-                if s.lines {
-                    let mut path = Vec::new();
-                    let mut previous = None;
-                    for p in pts {
-                        if p.iter().all(|v| v.is_finite()) {
-                            let q = map(p);
-                            if let Some(prev) = previous {
-                                if let Some((a, z)) = clip(prev, q, left, right, top, bottom) {
-                                    if path.last().is_some_and(|last| *last != a) {
-                                        fig.elements.push(Element::Path(
-                                            std::mem::take(&mut path),
-                                            rgb,
-                                            s.width,
-                                        ));
-                                    }
-                                    if path.is_empty() {
-                                        path.push(a);
-                                    }
-                                    path.push(z);
-                                } else if !path.is_empty() {
-                                    fig.elements.push(Element::Path(
-                                        std::mem::take(&mut path),
-                                        rgb,
-                                        s.width,
-                                    ));
-                                }
-                            }
-                            previous = Some(q);
-                        } else {
-                            previous = None;
-                            if !path.is_empty() {
-                                fig.elements.push(Element::Path(
-                                    std::mem::take(&mut path),
-                                    rgb,
-                                    s.width,
-                                ));
-                            }
-                        }
-                    }
-                    if !path.is_empty() {
-                        fig.elements.push(Element::Path(path, rgb, s.width));
-                    }
-                }
-                if s.markers {
-                    for &p in &c.points {
-                        let p = map([axis(p[0], s.log_x), axis(p[1], s.log_y)]);
-                        if p[0] >= left && p[0] <= right && p[1] >= top && p[1] <= bottom {
-                            fig.elements
-                                .push(Element::Circle(p[0], p[1], s.marker_size, rgb));
-                        }
-                    }
-                }
-                if s.legend {
-                    let yy = top + 16.0 + local as f64 * 18.0;
-                    fig.elements.push(Element::Path(
-                        vec![[right - 230.0, yy], [right - 205.0, yy]],
-                        rgb,
-                        s.width,
-                    ));
-                    fig.elements
-                        .push(Element::Text(right - 200.0, yy + 4.0, c.name.clone(), 11.0));
-                }
-            }
-            for annotation in annotations {
-                match annotation {
-                    Annotation::Point {
-                        curve,
-                        x,
-                        y,
-                        label,
-                        color,
-                        ..
-                    } if subset.iter().any(|c| &c.name == curve) => {
-                        let p = map([axis(*x, s.log_x), axis(*y, s.log_y)]);
-                        if p.iter().all(|v| v.is_finite())
-                            && p[0] >= left
-                            && p[0] <= right
-                            && p[1] >= top
-                            && p[1] <= bottom
-                        {
-                            fig.elements.push(Element::Circle(p[0], p[1], 5., *color));
-                            let tx = (p[0] + 12.).min(
-                                (right - label.chars().count() as f64 * s.font_size as f64 * 0.48)
-                                    .max(left + 8.),
-                            );
-                            let ty = (p[1] - 14.).max(top + 16.);
-                            fig.elements
-                                .push(Element::Path(vec![p, [tx, ty + 3.]], *color, 1.));
-                            fig.elements.push(Element::Rect(
-                                tx - 4.,
-                                ty - s.font_size as f64,
-                                ((label.chars().count() as f64 * s.font_size as f64 * 0.55) + 8.)
-                                    .min(right - tx + 4.),
-                                s.font_size as f64 + 6.,
-                                [255, 255, 255],
-                                0.94,
-                            ));
-                            fig.elements.push(Element::Text(tx, ty, label.clone(), 13.));
-                        }
-                    }
-                    Annotation::Region {
-                        x_axis,
-                        min,
-                        max,
-                        label,
-                        ..
-                    } if *x_axis == subset[0].sx => {
-                        let a = axis(min.min(*max), s.log_x).max(b[0]);
-                        let z = axis(min.max(*max), s.log_x).min(b[1]);
-                        if a.is_finite() && z.is_finite() && a < z {
-                            let x = map([a, b[2]])[0].min(map([z, b[2]])[0]);
-                            fig.elements
-                                .push(Element::Text(x + 7., top + 18., label.clone(), 12.));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        Ok(fig)
-    }
-    fn svg(&self) -> String {
-        let mut out=format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\"><rect width=\"100%\" height=\"100%\" fill=\"white\"/>",self.width,self.height,self.width,self.height);
-        for e in &self.elements {
-            match e {
-                Element::Path(p, c, w) => {
-                    let mut d = String::new();
-                    for (i, [x, y]) in p.iter().enumerate() {
-                        let _ = write!(d, "{}{} {} ", if i == 0 { "M" } else { "L" }, x, y);
-                    }
-                    let _=write!(out,"<path d=\"{d}\" fill=\"none\" stroke=\"rgb({},{},{})\" stroke-width=\"{w}\"/>",c[0],c[1],c[2]);
-                }
-                Element::Text(x, y, t, size) => {
-                    let size = size * self.font_size / 14.;
-                    let _=write!(out,"<text x=\"{x}\" y=\"{y}\" font-family=\"{}\" font-size=\"{size}\">{}</text>",xml(&self.font_family),xml(t));
-                }
-                Element::Circle(x, y, r, c) => {
-                    let _ = write!(
-                        out,
-                        "<circle cx=\"{x}\" cy=\"{y}\" r=\"{r}\" fill=\"rgb({},{},{})\"/>",
-                        c[0], c[1], c[2]
-                    );
-                }
-                Element::Rect(x, y, w, h, color, alpha) => {
-                    let _=write!(out,"<rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" fill=\"rgb({},{},{})\" fill-opacity=\"{alpha}\"/>",color[0],color[1],color[2]);
-                }
-            }
-        }
-        out.push_str("</svg>");
-        out
-    }
-}
-fn xml(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-fn clip(a: [f64; 2], z: [f64; 2], l: f64, r: f64, t: f64, b: f64) -> Option<([f64; 2], [f64; 2])> {
-    let d = [z[0] - a[0], z[1] - a[1]];
-    let mut lo: f64 = 0.0;
-    let mut hi: f64 = 1.0;
-    for (p, q) in [
-        (-d[0], a[0] - l),
-        (d[0], r - a[0]),
-        (-d[1], a[1] - t),
-        (d[1], b - a[1]),
-    ] {
-        if p == 0.0 {
-            if q < 0.0 {
-                return None;
-            }
-        } else {
-            let v = q / p;
-            if p < 0.0 {
-                lo = lo.max(v);
-            } else {
-                hi = hi.min(v);
-            }
-            if lo > hi {
-                return None;
-            }
-        }
-    }
-    Some((
-        [a[0] + lo * d[0], a[1] + lo * d[1]],
-        [a[0] + hi * d[0], a[1] + hi * d[1]],
-    ))
+fn svg_tree(svg: &str) -> Result<resvg::usvg::Tree, String> {
+    let mut options = resvg::usvg::Options::default();
+    options.font_family = fonts().family.clone();
+    static FONTDB: LazyLock<Arc<resvg::usvg::fontdb::Database>> = LazyLock::new(|| {
+        let mut database = resvg::usvg::fontdb::Database::new();
+        database.load_font_data(fonts().regular.to_vec());
+        database.load_font_data(fonts().semibold.to_vec());
+        database.load_font_data(fonts().mono.to_vec());
+        database.load_font_data(theme::PHOSPHOR.to_vec());
+        // Keep bundled Inter first, but permit the same system fallback as the UI.
+        database.load_system_fonts();
+        Arc::new(database)
+    });
+    options.fontdb = Arc::clone(&FONTDB);
+    resvg::usvg::Tree::from_str(svg, &options)
+        .map_err(|error| format!("Could not parse the figure: {error}"))
 }
 
-pub fn save(
-    path: &Path,
-    curves: &[Curve],
-    style: &Style,
-    annotations: &[&Annotation],
-) -> Result<(), String> {
-    let figure = Figure::build(curves, style, annotations)?;
-    let ext = path
-        .extension()
-        .and_then(|x| x.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    let tree = render_tree(&figure)?;
-    let bytes = match ext.as_str() {
-        "svg" => tree
+fn pixmap(tree: &resvg::usvg::Tree, size: [u32; 2]) -> Result<resvg::tiny_skia::Pixmap, String> {
+    let mut image = resvg::tiny_skia::Pixmap::new(size[0], size[1])
+        .ok_or("Could not allocate the figure image.")?;
+    resvg::render(
+        tree,
+        resvg::tiny_skia::Transform::identity(),
+        &mut image.as_mut(),
+    );
+    Ok(image)
+}
+
+/// EPS has no transparency. Composite the premultiplied raster on white before
+/// writing its Level 2 colorimage, instead of turning transparent areas black.
+fn eps(image: &resvg::tiny_skia::Pixmap) -> Vec<u8> {
+    let (width, height) = (image.width(), image.height());
+    let header = format!(
+        "%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 {width} {height}\n%%LanguageLevel: 2\n%%EndComments\ngsave\n{width} {height} scale\n{width} {height} 8 [{width} 0 0 -{height} 0 {height}]\n{{currentfile {} string readhexstring pop}} false 3 colorimage\n",
+        (width * 3).min(65_535),
+    );
+    let mut output =
+        Vec::with_capacity(header.len() + image.data().len() / 4 * 6 + height as usize + 32);
+    output.extend_from_slice(header.as_bytes());
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for row in image.data().chunks_exact(width as usize * 4) {
+        for pixel in row.chunks_exact(4) {
+            let background = 255 - pixel[3];
+            for &component in &pixel[..3] {
+                let value = component.saturating_add(background);
+                output.push(HEX[(value >> 4) as usize]);
+                output.push(HEX[(value & 15) as usize]);
+            }
+        }
+        output.push(b'\n');
+    }
+    output.extend_from_slice(b"grestore\nshowpage\n%%EOF\n");
+    output
+}
+
+/// Render a figure in any supported file format. SVG text is converted to
+/// outlines so the file looks identical without Inter installed; PDF embeds
+/// the exact font faces loaded into the SVG tree.
+pub(crate) fn render(
+    workspace: &Workspace,
+    state: &ChartState,
+    settings: &Settings,
+    chart: &ChartOptions,
+    figure: &FigureOptions,
+    app_dark: bool,
+    format: FigureFormat,
+) -> Result<Vec<u8>, String> {
+    let svg = figure_svg(workspace, state, settings, chart, figure, app_dark, format)?;
+    let tree = svg_tree(&svg)?;
+    match format {
+        FigureFormat::Svg => Ok(tree
             .to_string(&resvg::usvg::WriteOptions::default())
-            .into_bytes(),
-        "pdf" => svg2pdf::to_pdf(
+            .into_bytes()),
+        FigureFormat::Pdf => svg2pdf::to_pdf(
             &tree,
             svg2pdf::ConversionOptions::default(),
             svg2pdf::PageOptions::default(),
         )
-        .map_err(|e| e.to_string())?,
-        "png" | "eps" => {
-            let mut pixmap = resvg::tiny_skia::Pixmap::new(figure.width, figure.height)
-                .ok_or("Figure image allocation failed")?;
-            resvg::render(
-                &tree,
-                resvg::tiny_skia::Transform::identity(),
-                &mut pixmap.as_mut(),
-            );
-            if ext == "png" {
-                pixmap.encode_png().map_err(|e| e.to_string())?
-            } else {
-                eps_raster(&pixmap).into_bytes()
-            }
-        }
-        _ => return Err("Choose an SVG, PNG, PDF or EPS filename".into()),
-    };
-    std::fs::write(path, bytes).map_err(|e| e.to_string())
+        .map_err(|error| format!("Could not create the PDF: {error}")),
+        FigureFormat::Png => pixmap(&tree, dimensions(figure)?)?
+            .encode_png()
+            .map_err(|error| format!("Could not encode the PNG: {error}")),
+        FigureFormat::Eps => Ok(eps(&pixmap(&tree, dimensions(figure)?)?)),
+    }
 }
 
-fn render_tree(figure: &Figure) -> Result<resvg::usvg::Tree, String> {
-    let mut options = resvg::usvg::Options::default();
-    options.fontdb_mut().load_system_fonts();
-    resvg::usvg::Tree::from_str(&figure.svg(), &options).map_err(|e| e.to_string())
-}
-pub fn raster(
-    curves: &[Curve],
-    style: &Style,
-    annotations: &[&Annotation],
-) -> Result<eframe::egui::ColorImage, String> {
-    let figure = Figure::build(curves, style, annotations)?;
-    let tree = render_tree(&figure)?;
-    let mut pixmap = resvg::tiny_skia::Pixmap::new(figure.width, figure.height)
-        .ok_or("Figure image allocation failed")?;
-    resvg::render(
-        &tree,
-        resvg::tiny_skia::Transform::identity(),
-        &mut pixmap.as_mut(),
-    );
-    Ok(eframe::egui::ColorImage::from_rgba_premultiplied(
-        [figure.width as usize, figure.height as usize],
-        pixmap.data(),
+pub(crate) fn raster(
+    workspace: &Workspace,
+    state: &ChartState,
+    settings: &Settings,
+    chart: &ChartOptions,
+    figure: &FigureOptions,
+    app_dark: bool,
+) -> Result<ColorImage, String> {
+    let size = dimensions(figure)?;
+    let svg = figure_svg(
+        workspace,
+        state,
+        settings,
+        chart,
+        figure,
+        app_dark,
+        figure.format,
+    )?;
+    let image = pixmap(&svg_tree(&svg)?, size)?;
+    Ok(ColorImage::from_rgba_premultiplied(
+        [size[0] as usize, size[1] as usize],
+        image.data(),
     ))
 }
-fn eps_raster(pixmap: &resvg::tiny_skia::Pixmap) -> String {
-    let (w, h) = (pixmap.width(), pixmap.height());
-    let mut out=format!("%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 {w} {h}\n%%LanguageLevel: 2\n%%EndComments\ngsave\n{w} {h} scale\n{w} {h} 8 [{w} 0 0 -{h} 0 {h}]\n{{currentfile {} string readhexstring pop}} false 3 colorimage\n",w*3);
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    for row in pixmap.data().chunks_exact(w as usize * 4) {
-        for pixel in row.chunks_exact(4) {
-            for &byte in &pixel[..3] {
-                out.push(HEX[(byte >> 4) as usize] as char);
-                out.push(HEX[(byte & 15) as usize] as char);
+
+/// Headless/default export; format is inferred from the filename.
+pub(crate) fn save(
+    path: &Path,
+    workspace: &Workspace,
+    state: &ChartState,
+    settings: &Settings,
+    chart: &ChartOptions,
+) -> Result<(), String> {
+    save_with_options(
+        path,
+        workspace,
+        state,
+        settings,
+        chart,
+        &FigureOptions::default(),
+        false,
+    )
+}
+
+pub(crate) fn save_with_options(
+    path: &Path,
+    workspace: &Workspace,
+    state: &ChartState,
+    settings: &Settings,
+    chart: &ChartOptions,
+    figure: &FigureOptions,
+    app_dark: bool,
+) -> Result<(), String> {
+    let format = FigureFormat::from_path(path)?;
+    let bytes = render(workspace, state, settings, chart, figure, app_dark, format)?;
+    std::fs::write(path, bytes)
+        .map_err(|error| format!("Could not save {}: {error}", path.display()))
+}
+
+/// Queue the exact figure raster for the native clipboard.
+pub(crate) fn copy(
+    ctx: &egui::Context,
+    workspace: &Workspace,
+    state: &ChartState,
+    settings: &Settings,
+    chart: &ChartOptions,
+    figure: &FigureOptions,
+    app_dark: bool,
+) -> Result<(), String> {
+    ctx.copy_image(raster(workspace, state, settings, chart, figure, app_dark)?);
+    Ok(())
+}
+
+#[derive(Clone, Default)]
+struct Preview {
+    key: String,
+    texture: Option<egui::TextureHandle>,
+    error: Option<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn preview(
+    ctx: &egui::Context,
+    workspace: &Workspace,
+    state: &ChartState,
+    settings: &Settings,
+    chart: &ChartOptions,
+    figure: &FigureOptions,
+    app_dark: bool,
+    area: egui::Vec2,
+) -> Preview {
+    let id = egui::Id::unique("figure_preview");
+    let pixels_per_point = ctx.pixels_per_point();
+    let area = [
+        (area.x * pixels_per_point).max(64.0).round() as u32,
+        (area.y * pixels_per_point).max(64.0).round() as u32,
+    ];
+    let key = match serde_json::to_string(&(
+        workspace.generation,
+        &workspace.panes,
+        &workspace.annotations,
+        &workspace.x_key,
+        &workspace.mode,
+        state,
+        settings,
+        chart,
+        figure,
+        app_dark,
+        area,
+    )) {
+        Ok(key) => key,
+        Err(error) => {
+            return Preview {
+                error: Some(format!("Could not prepare preview: {error}")),
+                ..Preview::default()
             }
         }
-        out.push('\n');
-    }
-    out.push_str("grestore\nshowpage\n%%EOF\n");
-    out
-}
-
-pub fn value_label(value: f64) -> String {
-    if value != 0. && (value.abs() >= 1e6 || value.abs() < 1e-3) {
-        return format!("{value:.3e}");
-    }
-    let mut text = format!("{value:.4}");
-    while text.ends_with('0') {
-        text.pop();
-    }
-    if text.ends_with('.') {
-        text.pop();
-    }
-    if text == "-0" {
-        text.remove(0);
-    }
-    text
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    fn curve() -> Curve {
-        Curve {
-            name: "SOC".into(),
-            sx: "Time [s]".into(),
-            sy: "Power [W]".into(),
-            points: vec![[0., 1.], [2., 2.], [4., f64::NAN], [6., 3.], [8., 4.]],
+    };
+    if let Some(cached) = ctx.data(|data| data.get_temp::<Preview>(id)) {
+        if cached.key == key {
+            return cached;
         }
     }
-    #[test]
-    fn excluded_samples_do_not_bridge_in_shared_images() {
-        let style = Style {
-            grid: false,
-            legend: false,
-            limits: Some([0., 10., 0., 10.]),
-            ..Style::default()
-        };
-        let figure = Figure::build(&[curve()], &style, &[]).unwrap();
-        let paths = figure
-            .elements
-            .iter()
-            .filter_map(|e| match e {
-                Element::Path(points, rgb, _) if *rgb == color(0) => Some(points),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(paths.len(), 2);
-        assert!(paths[0].last().unwrap()[0] < paths[1].first().unwrap()[0]);
-    }
-    #[test]
-    fn highlighted_regions_clip_and_reverse_with_the_x_axis() {
-        let style = Style {
-            grid: false,
-            legend: false,
-            flip_x: true,
-            limits: Some([0., 10., 0., 10.]),
-            ..Style::default()
-        };
-        let region = Annotation::Region {
-            mode: "Regular".into(),
-            x_axis: "Time [s]".into(),
-            min: 4.,
-            max: -2.,
-            label: "Workload".into(),
-            color: [234, 153, 41],
-        };
-        let figure = Figure::build(&[curve()], &style, &[&region]).unwrap();
-        let region = figure
-            .elements
-            .iter()
-            .find_map(|e| match e {
-                Element::Rect(x, y, w, h, _, alpha) if *alpha == 0.15 => Some([*x, *y, *w, *h]),
-                _ => None,
-            })
-            .unwrap();
-        let right = style.figure_width as f64 - 30.;
-        let width = right - 90.;
-        assert_eq!(
-            region,
-            [
-                right - width * 0.4,
-                35.,
-                width * 0.4,
-                style.figure_height as f64 - 100.
-            ]
+    let result = (|| {
+        let [width, height] = dimensions(figure)?;
+        let factor = (f64::from(area[0]) / f64::from(width))
+            .min(f64::from(area[1]) / f64::from(height))
+            .min(1.0);
+        let size = [
+            (f64::from(width) * factor).round().max(1.0) as u32,
+            (f64::from(height) * factor).round().max(1.0) as u32,
+        ];
+        let svg = figure_svg(
+            workspace,
+            state,
+            settings,
+            chart,
+            figure,
+            app_dark,
+            figure.format,
+        )?;
+        let tree = svg_tree(&svg)?;
+        let mut image = resvg::tiny_skia::Pixmap::new(size[0], size[1])
+            .ok_or("Could not allocate the figure preview.")?;
+        let transform = resvg::tiny_skia::Transform::from_scale(
+            size[0] as f32 / width as f32,
+            size[1] as f32 / height as f32,
         );
+        resvg::render(&tree, transform, &mut image.as_mut());
+        Ok::<_, String>(ColorImage::from_rgba_premultiplied(
+            [size[0] as usize, size[1] as usize],
+            image.data(),
+        ))
+    })();
+    let cache = match result {
+        Ok(image) => Preview {
+            key,
+            texture: Some(ctx.load_texture("figure preview", image, egui::TextureOptions::LINEAR)),
+            error: None,
+        },
+        Err(error) => Preview {
+            key,
+            texture: None,
+            error: Some(error),
+        },
+    };
+    ctx.data_mut(|data| data.insert_temp(id, cache.clone()));
+    cache
+}
+
+/// A save dialog that suggests `<first file><suffix>.<extension>` next to the
+/// data, so exports land beside the logs they came from.
+pub(crate) fn save_dialog(workspace: &Workspace, suffix: &str, extension: &str) -> rfd::FileDialog {
+    let first = workspace
+        .sources
+        .iter()
+        .find(|source| !source.path.as_os_str().is_empty());
+    let stem = first
+        .and_then(|source| source.path.file_stem())
+        .map_or_else(
+            || "rustDatView".into(),
+            |stem| stem.to_string_lossy().into_owned(),
+        );
+    let mut dialog = rfd::FileDialog::new().set_file_name(format!("{stem}{suffix}.{extension}"));
+    if let Some(folder) = first.and_then(|source| source.path.parent()) {
+        // The Windows dialog ignores folders written with forward slashes.
+        dialog = dialog.set_directory(PathBuf::from(folder.to_string_lossy().replace('/', "\\")));
     }
+    dialog
+}
+
+/// A Python script reproducing the current chart: files, processing steps,
+/// formulas, plotted channels, mode and the main chart styling.
+pub(crate) fn python_script(
+    workspace: &Workspace,
+    chart: &ChartOptions,
+    mut options: dv_plot::ScriptOptions,
+) -> Result<String, String> {
+    use crate::workspace::Mode;
+    use dv_core::common::clean_col;
+    use dv_plot::{CompareMode, PlotType};
+    // One selection per plotted series, so removed or hidden-by-source series
+    // are not resurrected in the script.
+    let mut selections = Vec::new();
+    for series in &workspace.series {
+        let Some(table) = workspace.tables.tabs.get(series.source) else {
+            continue;
+        };
+        let columns = table.data.columns();
+        let position = |key: &str| {
+            columns
+                .iter()
+                .position(|column| clean_col(&column.name) == key)
+        };
+        if let (Some(x), Some(y)) = (
+            workspace.x_key.as_deref().and_then(position),
+            position(&series.key),
+        ) {
+            if !selections.contains(&(series.source, x, y)) {
+                selections.push((series.source, x, y));
+            }
+        }
+    }
+    if selections.is_empty() {
+        return Err("Plot at least one channel to export a script.".into());
+    }
+    options.grid = chart.grid;
+    options.legend = chart.legend;
+    options.log_x = chart.log_x;
+    options.log_y = chart.log_y;
+    options.flip_x = chart.flip_x;
+    options.flip_y = chart.flip_y;
+    options.title.clone_from(&chart.title);
+    options.x_label.clone_from(&chart.x_label);
+    options.y_label.clone_from(&chart.y_label);
+    let plot_type = match workspace.mode {
+        Mode::Signals | Mode::Compare => PlotType::Regular,
+        Mode::Distribution => PlotType::Pdf(workspace.options.pdf.clone()),
+        Mode::Spectrum => PlotType::Fft(workspace.options.fft.clone()),
+        Mode::Normalized => PlotType::MinMax(workspace.options.normalized.clone()),
+        Mode::Polar => PlotType::Polar(workspace.options.polar.clone()),
+    };
+    let active = workspace
+        .sources
+        .iter()
+        .filter(|source| source.active)
+        .count();
+    let comparison = (workspace.mode == Mode::Compare).then(|| {
+        let mode = workspace.options.compare_mode.unwrap_or(if active <= 1 {
+            CompareMode::OneTableColumns
+        } else if workspace.selected.len() == 1 {
+            CompareMode::TablesOneColumn
+        } else {
+            CompareMode::TablesSimilarColumns
+        });
+        (mode, workspace.options.compare_method)
+    });
+    let script = dv_plot::PythonScripter {
+        files: workspace.tables.unique_filenames(),
+        selections,
+        options,
+        plot_type,
+        comparison,
+    };
+    script
+        .generate(&workspace.tables.tabs, &workspace.pipeline)
+        .map_err(|error| error.to_string())
+}
+
+/// Returns a status or error for the app's toast/status area when an action is
+/// completed. The caller owns `open` and the serializable `figure` preferences.
+pub(crate) fn show_dialog(
+    ctx: &egui::Context,
+    open: &mut bool,
+    figure: &mut FigureOptions,
+    workspace: &Workspace,
+    state: &ChartState,
+    settings: &Settings,
+    chart: &ChartOptions,
+    app_dark: bool,
+) -> Option<Result<String, String>> {
+    use crate::ui::widgets;
+    if !*open {
+        return None;
+    }
+    let tokens = theme::Tokens::for_dark(theme::is_dark(ctx));
+    let mut result = None;
+    let mut close = false;
+    let screen = ctx.content_rect();
+    let size = egui::vec2(
+        (screen.width() - 80.0).clamp(640.0, 1040.0),
+        (screen.height() - 80.0).clamp(440.0, 640.0),
+    );
+    let modal = egui::Modal::new(egui::Id::unique("export_figure")).show(ctx, |ui| {
+        ui.set_width(size.x);
+        ui.set_height(size.y);
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Export figure")
+                    .family(theme::semibold())
+                    .size(17.0),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if widgets::icon_button(ui, crate::ui::icons::CLOSE, "Close · Esc").clicked() {
+                    close = true;
+                }
+            });
+        });
+        ui.add_space(6.0);
+        let body_height = size.y - 86.0;
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(262.0, body_height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("figure-options")
+                        .max_height(body_height)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.set_width(250.0);
+                            widgets::section_label(ui, "Format");
+                            if let Some(format) = widgets::segmented(
+                                ui,
+                                figure.format,
+                                &[
+                                    (
+                                        FigureFormat::Png,
+                                        "PNG",
+                                        "Raster image for chat, slides and documents",
+                                    ),
+                                    (
+                                        FigureFormat::Svg,
+                                        "SVG",
+                                        "Vector graphics; text is converted to outlines",
+                                    ),
+                                    (
+                                        FigureFormat::Pdf,
+                                        "PDF",
+                                        "Vector document with embedded fonts",
+                                    ),
+                                    (
+                                        FigureFormat::Eps,
+                                        "EPS",
+                                        "PostScript with an embedded raster",
+                                    ),
+                                ],
+                            ) {
+                                figure.format = format;
+                            }
+                            ui.add_space(10.0);
+                            widgets::section_label(ui, "Size");
+                            let preset = match (figure.width, figure.height) {
+                                (1920, 1080) => "Slide · 1920 × 1080",
+                                (1600, 1000) => "Document · 1600 × 1000",
+                                (1200, 1200) => "Square · 1200 × 1200",
+                                (1200, 600) => "Wide · 1200 × 600",
+                                _ => "Custom",
+                            };
+                            egui::ComboBox::from_id_salt("figure_size")
+                                .width(250.0)
+                                .selected_text(preset)
+                                .show_ui(ui, |ui| {
+                                    for (label, width, height) in [
+                                        ("Slide · 1920 × 1080", 1920, 1080),
+                                        ("Document · 1600 × 1000", 1600, 1000),
+                                        ("Square · 1200 × 1200", 1200, 1200),
+                                        ("Wide · 1200 × 600", 1200, 600),
+                                    ] {
+                                        if ui
+                                            .selectable_label(
+                                                (figure.width, figure.height) == (width, height),
+                                                label,
+                                            )
+                                            .clicked()
+                                        {
+                                            figure.width = width;
+                                            figure.height = height;
+                                        }
+                                    }
+                                });
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    egui::DragValue::new(&mut figure.width)
+                                        .range(200..=16_384)
+                                        .speed(10)
+                                        .suffix(" px"),
+                                );
+                                ui.label("×");
+                                ui.add(
+                                    egui::DragValue::new(&mut figure.height)
+                                        .range(150..=16_384)
+                                        .speed(10)
+                                        .suffix(" px"),
+                                );
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new("Resolution").color(tokens.text_secondary),
+                                );
+                                if let Some(scale) = widgets::segmented(
+                                    ui,
+                                    figure.scale,
+                                    &[
+                                        (1, "1×", ""),
+                                        (2, "2×", "Sharper on high-DPI screens"),
+                                        (3, "3×", "Print quality"),
+                                    ],
+                                ) {
+                                    figure.scale = scale;
+                                }
+                            });
+                            ui.add_space(10.0);
+                            widgets::section_label(ui, "Appearance");
+                            if let Some(choice) = widgets::segmented(
+                                ui,
+                                figure.theme,
+                                &[
+                                    (FigureTheme::Light, "Light", "Best for documents and print"),
+                                    (FigureTheme::Dark, "Dark", "Dark background"),
+                                    (
+                                        FigureTheme::MatchApp,
+                                        "Match app",
+                                        "Use the current app theme",
+                                    ),
+                                ],
+                            ) {
+                                figure.theme = choice;
+                            }
+                            ui.add_enabled(
+                                matches!(figure.format, FigureFormat::Png | FigureFormat::Svg),
+                                egui::Checkbox::new(
+                                    &mut figure.transparent,
+                                    "Transparent background",
+                                ),
+                            );
+                            ui.add_space(10.0);
+                            widgets::section_label(ui, "Include");
+                            ui.checkbox(&mut figure.include_title, "Title");
+                            ui.checkbox(&mut figure.include_legend, "Legend");
+                            ui.checkbox(&mut figure.include_annotations, "Annotations");
+                            ui.checkbox(&mut figure.include_selection, "Selected range");
+                            ui.add_space(10.0);
+                            widgets::section_label(ui, "Labels");
+                            for (label, value, hint) in [
+                                ("Title", &mut figure.title, "Chart title"),
+                                (
+                                    "Subtitle",
+                                    &mut figure.subtitle,
+                                    "e.g. BIOS 1.2 · 25 °C ambient",
+                                ),
+                                ("X axis", &mut figure.x_label, "Uses the chart label"),
+                                ("Y axis", &mut figure.y_label, "Uses each pane's unit"),
+                            ] {
+                                ui.label(egui::RichText::new(label).color(tokens.text_secondary));
+                                ui.add(
+                                    egui::TextEdit::singleline(value)
+                                        .hint_text(hint)
+                                        .desired_width(246.0),
+                                );
+                            }
+                        });
+                },
+            );
+            ui.add_space(12.0);
+            let preview_size = egui::vec2(ui.available_width(), body_height);
+            egui::Frame::new()
+                .fill(tokens.app_bg)
+                .stroke(egui::Stroke::new(1.0, tokens.border))
+                .corner_radius(8)
+                .show(ui, |ui| {
+                    ui.set_min_size(preview_size - egui::vec2(2.0, 2.0));
+                    ui.centered_and_justified(|ui| {
+                        let preview = preview(
+                            ctx,
+                            workspace,
+                            state,
+                            settings,
+                            chart,
+                            figure,
+                            app_dark,
+                            preview_size - egui::vec2(24.0, 24.0),
+                        );
+                        if let Some(texture) = preview.texture {
+                            ui.image((texture.id(), texture.size_vec2() / ctx.pixels_per_point()));
+                        } else if let Some(error) = preview.error {
+                            ui.colored_label(tokens.error, error);
+                        }
+                    });
+                });
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            let pixels = dimensions(figure)
+                .map(|[w, h]| format!("{w} × {h} px"))
+                .unwrap_or_default();
+            ui.label(egui::RichText::new(pixels).color(tokens.text_muted));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let save = egui::Button::new(egui::RichText::new("Save…").color(Color32::WHITE))
+                    .fill(tokens.accent)
+                    .min_size(egui::vec2(92.0, 30.0));
+                if ui.add(save).clicked() {
+                    let extension = figure.format.extension();
+                    if let Some(mut path) = save_dialog(workspace, "", extension)
+                        .add_filter(figure.format.label(), &[extension])
+                        .save_file()
+                    {
+                        if path.extension().is_none() {
+                            path.set_extension(extension);
+                        }
+                        let saved = save_with_options(
+                            &path, workspace, state, settings, chart, figure, app_dark,
+                        );
+                        if saved.is_ok() {
+                            close = true;
+                        }
+                        result =
+                            Some(saved.map(|()| format!("Saved figure to {}", path.display())));
+                    }
+                }
+                if ui
+                    .add(egui::Button::new("Copy to clipboard").min_size(egui::vec2(0.0, 30.0)))
+                    .clicked()
+                {
+                    result = Some(
+                        copy(ctx, workspace, state, settings, chart, figure, app_dark)
+                            .map(|()| "Figure copied to the clipboard".into()),
+                    );
+                }
+            });
+        });
+    });
+    if close || modal.should_close() {
+        *open = false;
+    }
+    result
 }

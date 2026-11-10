@@ -1,22 +1,74 @@
-use super::*;
+use dv_core::{
+    common::clean_col,
+    units::{parse_unit, split_name_unit},
+};
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
-#[derive(Default)]
-pub(super) struct SearchCache {
-    identity: Option<u64>,
-    table_name: String,
-    active_name: String,
-    names: Vec<ChannelName>,
-    query: String,
-    query_valid: bool,
-    alternatives: Vec<Vec<String>>,
-    ranked: Vec<(MatchRank, usize)>,
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Channel {
+    pub key: String,
+    pub label: String,
+    pub unit: String,
+    pub family: String,
+    pub original: String,
 }
 
-struct ChannelName {
-    original: String,
-    folded: String,
-    numeric: bool,
-    index: bool,
+pub(crate) fn catalog(tables: &dv_core::TableList) -> Vec<Channel> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    for table in &tables.tabs {
+        for column in table.data.columns() {
+            if !is_channel(column) {
+                continue;
+            }
+            let key = clean_col(&column.name);
+            if key.is_empty() || !seen.insert(key.clone()) {
+                continue;
+            }
+            let (label, unit) = split_name_unit(&column.name);
+            let unit = parse_unit(&unit);
+            let family = if column.is_datetime() {
+                dv_core::units::UnitFamily::Time.to_string()
+            } else {
+                unit.family.to_string()
+            };
+            result.push(Channel {
+                key,
+                label,
+                unit: unit.symbol,
+                family,
+                original: column.name.clone(),
+            });
+        }
+    }
+    result
+}
+
+/// Numeric and timestamp columns can be plotted; text columns cannot.
+fn is_channel(column: &dv_core::Column) -> bool {
+    column.is_float() || column.is_datetime()
+}
+
+/// The plottable channels of one table, without its row index.
+pub(crate) fn channel_count(table: &dv_core::Table) -> usize {
+    table
+        .data
+        .columns()
+        .iter()
+        .filter(|column| is_channel(column) && !crate::selection::is_index(&column.name))
+        .count()
+}
+
+/// A column name with its unit as displayed everywhere else (`Coolant [degC]`
+/// becomes `Coolant [°C]`), so derived labels such as `PSD(Coolant) [°C²/Hz]`
+/// match the sidebar, legend and statistics.
+pub(crate) fn display_name(name: &str) -> String {
+    let (label, unit) = split_name_unit(name);
+    if unit.is_empty() {
+        return name.to_owned();
+    }
+    format!("{label} [{}]", parse_unit(&unit).symbol)
 }
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -26,8 +78,6 @@ struct MatchRank {
     start: usize,
 }
 
-// Unicode lowercase expands characters when needed. Also fold the common
-// non-lowercase case equivalents that matter for searching telemetry names.
 fn fold_case(value: &str) -> String {
     let mut folded = String::with_capacity(value.len());
     for character in value.chars().flat_map(char::to_lowercase) {
@@ -51,12 +101,12 @@ fn token_rank(name: &str, token: &str) -> Option<MatchRank> {
             start: name[..start].chars().count(),
         });
     }
-    let mut characters = name.chars().enumerate();
+    let mut chars = name.chars().enumerate();
     let mut first = None;
     let mut last = 0;
     let mut count = 0;
     for wanted in token.chars() {
-        let (position, _) = characters.find(|(_, character)| *character == wanted)?;
+        let (position, _) = chars.find(|(_, c)| *c == wanted)?;
         first.get_or_insert(position);
         last = position;
         count += 1;
@@ -86,319 +136,128 @@ fn alternative_rank(name: &str, tokens: &[String]) -> Option<MatchRank> {
     Some(rank)
 }
 
-impl SearchCache {
-    fn refresh_names(&mut self, table: &Table) -> bool {
-        let columns = table.data.columns();
-        if self.identity == Some(table.identity())
-            && self.table_name == table.raw_name()
-            && self.active_name == table.active_name
-            && self.names.len() == columns.len()
-            && self.names.iter().zip(columns).all(|(cached, column)| {
-                cached.original == column.name
-                    && cached.numeric == (column.is_float() || column.is_datetime())
-            })
-        {
-            return false;
-        }
-        self.identity = Some(table.identity());
-        self.table_name.clear();
-        self.table_name.push_str(table.raw_name());
-        self.active_name.clone_from(&table.active_name);
-        self.names = columns
-            .iter()
-            .map(|column| ChannelName {
-                original: column.name.clone(),
-                folded: fold_case(&column.name),
-                numeric: column.is_float() || column.is_datetime(),
-                index: selection::is_index(&column.name),
-            })
-            .collect();
-        self.query_valid = false;
-        true
-    }
-
-    fn search(&mut self, query: &str) {
-        if self.query_valid && self.query == query {
-            return;
-        }
-        self.query.clear();
-        self.query.push_str(query);
-        self.alternatives = query
-            .split('|')
-            .map(|alternative| {
-                alternative
-                    .split_whitespace()
-                    .map(fold_case)
-                    .collect::<Vec<_>>()
-            })
-            .filter(|tokens| !tokens.is_empty())
-            .collect();
-        self.ranked.clear();
-        for (index, name) in self.names.iter().enumerate() {
-            let rank = if self.alternatives.is_empty() {
-                Some(MatchRank::default())
-            } else {
-                self.alternatives
-                    .iter()
-                    .filter_map(|tokens| alternative_rank(&name.folded, tokens))
-                    .min()
-            };
-            if let Some(rank) = rank {
-                self.ranked.push((rank, index));
-            }
-        }
-        // The original column index explicitly breaks equal-score ties.
-        self.ranked.sort_unstable();
-        self.query_valid = true;
-    }
-
-    fn allowed(&self, index: usize, common: Option<&[usize]>) -> bool {
-        self.names[index].numeric && common.is_none_or(|indices| indices.contains(&index))
-    }
-
-    fn select_matches(&self, selection: &mut Selection, common: Option<&[usize]>) -> bool {
-        let before = selection.ys.len();
-        for &(_, index) in &self.ranked {
-            if self.allowed(index, common)
-                && index != selection.x
-                && !self.names[index].index
-                && !selection.ys.contains(&index)
-            {
-                selection.ys.push(index);
-            }
-        }
-        if before != selection.ys.len() {
-            selection.ys.sort_unstable();
-            true
-        } else {
-            false
-        }
-    }
-
-    fn deselect_matches(&self, selection: &mut Selection, common: Option<&[usize]>) -> bool {
-        let before = selection.ys.len();
-        selection.ys.retain(|index| {
-            !self
-                .ranked
-                .iter()
-                .any(|(_, matched)| matched == index && self.allowed(*matched, common))
-        });
-        before != selection.ys.len()
-    }
+#[derive(Default)]
+pub(crate) struct SearchCache {
+    names: Vec<String>,
+    query: Option<String>,
+    ranked: Vec<usize>,
 }
-
-impl DatView {
-    pub(super) fn channel_picker(
-        &mut self,
-        ui: &mut egui::Ui,
-        table_index: usize,
-        common: Option<&[usize]>,
-    ) {
-        let table = &self.tables.tabs[table_index];
-        let Some(selection) = self.selections.get_mut(&table_index) else {
-            return;
-        };
-        let cache = self.channel_search.entry(table_index).or_default();
-        cache.refresh_names(table);
-        let dirty = &mut self.dirty;
-        ui.push_id(table_index, |ui| {
-            egui::CollapsingHeader::new(table.active_name.as_str())
-                .default_open(true)
-                .show(ui, |ui| {
-                    egui::ComboBox::from_id_salt("x")
-                        .selected_text(format!(
-                            "X: {}",
-                            cache.names.get(selection.x).map(|name| name.original.as_str()).unwrap_or("—")
-                        ))
-                        .show_ui(ui, |ui| {
-                            for (index, name) in cache.names.iter().enumerate() {
-                                if cache.allowed(index, common)
-                                    && ui.selectable_value(&mut selection.x, index, &name.original).changed()
-                                {
-                                    *dirty = true;
-                                }
-                            }
-                        });
-                    ui.add(
-                        egui::TextEdit::singleline(&mut selection.filter)
-                            .hint_text("Filter channels: cpu power | vcore")
-                            .desired_width(f32::INFINITY),
-                    ).on_hover_text("Case-insensitive fuzzy search. Spaces require every token; | separates alternatives. Hidden selections are preserved.");
-                    ui.horizontal_wrapped(|ui| {
-                        for (label, query) in [
-                            ("Power rails", "power | vcore | voltage | vrm | rail | +12 | +5 | +3.3"),
-                            ("Clocks", "clock | frequency | mhz | ghz"),
-                            ("Temperatures", "temperature | temp | thermal | °c"),
-                        ] {
-                            if ui.small_button(label).clicked() {
-                                selection.filter.clear();
-                                selection.filter.push_str(query);
-                            }
-                        }
-                    });
-                    cache.search(&selection.filter);
-                    let matches = cache.ranked.iter().filter(|(_, index)| cache.allowed(*index, common)).count();
-                    let matching_selected = cache.ranked.iter().filter(|(_, index)| {
-                        cache.allowed(*index, common) && selection.ys.contains(index)
-                    }).count();
-                    ui.weak(format!("{matches} matches · {} selected ({matching_selected} matching)", selection.ys.len()));
-                    ui.horizontal_wrapped(|ui| {
-                        if ui.button("Select matches").on_hover_text("Add matching Y channels without changing hidden selections. X and Index are excluded.").clicked() {
-                            *dirty |= cache.select_matches(selection, common);
-                        }
-                        if ui.button("Deselect matches").clicked() {
-                            *dirty |= cache.deselect_matches(selection, common);
-                        }
-                        if ui.button("Clear all").on_hover_text("Clear every Y selection, including channels hidden by this search.").clicked() {
-                            *dirty |= !selection.ys.is_empty();
-                            selection.ys.clear();
-                        }
-                    });
-                    if matches == 0 {
-                        ui.weak("No matching channels. Try fewer tokens or a different preset.");
-                    }
-                    for &(_, index) in &cache.ranked {
-                        if !cache.allowed(index, common) {
-                            continue;
-                        }
-                        let mut selected = selection.ys.contains(&index);
-                        if ui.checkbox(&mut selected, &cache.names[index].original).changed() {
-                            if selected {
-                                selection.ys.push(index);
-                                selection.ys.sort_unstable();
-                            } else {
-                                selection.ys.retain(|column| *column != index);
-                            }
-                            *dirty = true;
-                        }
-                    }
-                });
-        });
+impl SearchCache {
+    pub(crate) fn reset(&mut self, channels: &[Channel]) {
+        self.names = channels.iter().map(|c| fold_case(&c.original)).collect();
+        self.query = None;
+        self.ranked.clear();
+    }
+    pub(crate) fn search(&mut self, query: &str) -> Vec<usize> {
+        if self.query.as_deref() == Some(query) {
+            return self.ranked.clone();
+        }
+        let alternatives: Vec<Vec<String>> = query
+            .split('|')
+            .map(|part| part.split_whitespace().map(fold_case).collect())
+            .filter(|part: &Vec<String>| !part.is_empty())
+            .collect();
+        let mut ranked: Vec<_> = self
+            .names
+            .iter()
+            .enumerate()
+            .filter_map(|(index, name)| {
+                let rank = if alternatives.is_empty() {
+                    Some(MatchRank::default())
+                } else {
+                    alternatives
+                        .iter()
+                        .filter_map(|tokens| alternative_rank(name, tokens))
+                        .min()
+                };
+                rank.map(|rank| (rank, index))
+            })
+            .collect();
+        ranked.sort_unstable();
+        self.ranked = ranked.into_iter().map(|(_, i)| i).collect();
+        self.query = Some(query.to_owned());
+        self.ranked.clone()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dv_core::DataFrame;
-
-    fn table(names: &[&str]) -> Table {
-        Table::from_df(
-            DataFrame::from_floats(names.iter().copied(), vec![vec![1., 2.]; names.len()]).unwrap(),
-            "telemetry",
-        )
-    }
-
-    fn matches(cache: &SearchCache) -> Vec<&str> {
-        cache
-            .ranked
+    fn cache(names: &[&str]) -> SearchCache {
+        let channels: Vec<_> = names
             .iter()
-            .map(|(_, index)| cache.names[*index].original.as_str())
-            .collect()
-    }
-
-    #[test]
-    fn ranks_exact_then_substring_then_ordered_subsequence() {
+            .map(|s| Channel {
+                key: clean_col(s),
+                label: s.to_string(),
+                unit: String::new(),
+                family: String::new(),
+                original: s.to_string(),
+            })
+            .collect();
         let mut cache = SearchCache::default();
-        cache.refresh_names(&table(&[
+        cache.reset(&channels);
+        cache
+    }
+    #[test]
+    fn exact_substring_subsequence_and_original_order() {
+        let mut c = cache(&[
             "Core Power Usage",
             "CPU Package",
             "CPU",
             "CPU Core",
             "Power CPU",
-        ]));
-        cache.search("cpu");
-        assert_eq!(
-            matches(&cache),
-            [
-                "CPU",
-                "CPU Package",
-                "CPU Core",
-                "Power CPU",
-                "Core Power Usage"
-            ]
-        );
+        ]);
+        assert_eq!(c.search("cpu"), vec![2, 1, 3, 4, 0]);
         assert!(token_rank("cpu", "upc").is_none());
     }
-
     #[test]
-    fn complete_multi_token_names_rank_before_longer_substrings() {
-        let mut cache = SearchCache::default();
-        cache.refresh_names(&table(&[
+    fn complete_multitoken_and_unicode_or_queries() {
+        let mut c = cache(&[
             "CPU Power Extra",
             "CPU Power",
-            "Core Package Watts",
-        ]));
-        cache.search("cpu power");
-        assert_eq!(matches(&cache), ["CPU Power", "CPU Power Extra"]);
-    }
-
-    #[test]
-    fn tokens_are_and_with_or_alternatives_and_unicode_case() {
-        let mut cache = SearchCache::default();
-        cache.refresh_names(&table(&[
             "CPU Package Power",
-            "CPU Clock",
-            "GPU Power",
             "TÉMPÉRATURE",
             "Straße",
             "ΟΣ",
-        ]));
-        cache.search(" CPU   POWER | témp ");
-        assert_eq!(matches(&cache), ["TÉMPÉRATURE", "CPU Package Power"]);
-        cache.search("STRASSE | οσ");
-        assert_eq!(matches(&cache), ["Straße", "ΟΣ"]);
-        cache.search(" |  ");
-        assert_eq!(cache.ranked.len(), cache.names.len());
+        ]);
+        assert_eq!(c.search("cpu power"), vec![1, 0, 2]);
+        assert_eq!(c.search(" CPU   POWER | témp "), vec![1, 3, 0, 2]);
+        assert_eq!(c.search("STRASSE | οσ"), vec![4, 5]);
+        assert_eq!(c.search(" | ").len(), 6);
     }
-
     #[test]
-    fn cache_refreshes_for_renames_identity_and_columns() {
-        let mut source = table(&["CPU Power", "Clock"]);
-        let mut cache = SearchCache::default();
-        assert!(cache.refresh_names(&source));
-        cache.search("power");
-        assert!(!cache.refresh_names(&source));
-        let allocation = cache.names[1].folded.as_ptr();
-        let rankings = cache.ranked.as_ptr();
-        cache.search("power");
-        assert_eq!(allocation, cache.names[1].folded.as_ptr());
-        assert_eq!(rankings, cache.ranked.as_ptr());
-        source.data.column_mut(1).name = "Temperature".into();
-        assert!(cache.refresh_names(&source));
-        cache.search("power");
-        assert!(matches(&cache).is_empty());
-        source.set_raw_name("renamed");
-        assert!(cache.refresh_names(&source));
-        let replacement = table(&["Temperature", "Clock"]);
-        assert!(cache.refresh_names(&replacement));
-        source.data.remove(2);
-        assert!(cache.refresh_names(&source));
-        cache.search("clock");
-        assert!(matches(&cache).is_empty());
+    fn resetting_catalog_invalidates_the_cached_query() {
+        let mut c = cache(&["CPU Power", "Clock"]);
+        assert_eq!(c.search("power"), vec![0]);
+        c.reset(&[Channel {
+            key: "clock".into(),
+            label: "Clock".into(),
+            unit: "MHz".into(),
+            family: "Frequency".into(),
+            original: "Clock [MHz]".into(),
+        }]);
+        assert!(c.search("power").is_empty());
+        assert_eq!(c.search("mhz"), vec![0]);
     }
-
     #[test]
-    fn bulk_selection_is_additive_filtered_and_excludes_x_and_index() {
-        let source = table(&["Time [s]", "CPU Power", "GPU Power", "Temperature"]);
-        let mut cache = SearchCache::default();
-        cache.refresh_names(&source);
-        let mut selection = Selection {
-            x: 1,
-            ys: vec![4],
-            ..Default::default()
-        };
-        cache.search("power");
-        assert!(cache.select_matches(&mut selection, Some(&[0, 1, 2, 4])));
-        assert_eq!(selection.ys, [2, 4]);
-        assert!(!cache.select_matches(&mut selection, Some(&[0, 1, 2, 4])));
-        assert!(cache.deselect_matches(&mut selection, None));
-        assert_eq!(selection.ys, [4]);
-        cache.search("");
-        cache.select_matches(&mut selection, None);
-        assert_eq!(selection.ys, [2, 3, 4]);
-        cache.search("power");
-        cache.deselect_matches(&mut selection, Some(&[2]));
-        assert_eq!(selection.ys, [3, 4]);
+    fn units_have_one_spelling_and_counts_skip_index_and_text() {
+        let data = dv_core::DataFrame::from_columns(vec![
+            dv_core::Column::float("Time [s]", vec![0.0, 0.5]),
+            dv_core::Column::float("Coolant In [degC]", vec![30.0, 31.0]),
+            dv_core::Column::float("Pump Speed [RPM]", vec![1800.0, 1810.0]),
+            dv_core::Column::float("Gizmo Level [zz]", vec![3.0, 3.1]),
+            dv_core::Column::string("Mode", vec!["Quiet".into(), "Boost".into()]),
+        ])
+        .unwrap();
+        let table = dv_core::Table::from_df(data, "log");
+        assert_eq!(channel_count(&table), 4);
+        let units: Vec<_> = catalog(&dv_core::TableList::new(vec![table]))
+            .into_iter()
+            .filter(|channel| !crate::selection::is_index(&channel.original))
+            .map(|channel| channel.unit)
+            .collect();
+        assert_eq!(units, ["s", "°C", "rpm", "zz"]);
+        assert_eq!(display_name("Coolant In [degC]"), "Coolant In [°C]");
+        assert_eq!(display_name("Sensor [0]"), "Sensor [0]");
     }
 }

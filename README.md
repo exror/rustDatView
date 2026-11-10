@@ -1,101 +1,130 @@
-# rustDatView
+<p align="center">
+  <img src="assets/brand/rustdatview-logo.svg" alt="rustDatView" width="420">
+</p>
 
-Rust-native desktop implementation of [pyDatView](https://github.com/ebranlard/pyDatView): open tabulated scientific data, select channels, plot and compare signals, transform tables, and export results. The desktop application uses egui rather than wxPython; Python is not required to run it.
+<p align="center"><b>Open a log. See the story.</b><br>
+A fast, beautiful desktop viewer for engineering data — CPU and GPU telemetry, power and energy, clocks and temperatures, scope and power-analyzer exports, and simulation outputs.</p>
 
-## Build and run
+<p align="center">
+  <img src="docs/images/chart-dark.png" alt="rustDatView showing CPU power, clock and temperature panes with statistics for a selected range" width="900">
+</p>
 
-Install stable Rust with [rustup](https://rustup.rs/), then:
+rustDatView reads the file you already have — an HWiNFO or LibreHardwareMonitor log, a GPU-Z sensor log, an MSI Afterburner `.hml`, a PresentMon capture, a scope CSV, an OpenFAST output — and shows it the way you would have arranged it yourself: time on X, channels grouped into panes by unit, live values under the cursor, and statistics for any range you drag across. Everything else is one click or one keystroke away.
 
-```sh
-cargo build --release -p datview --locked
-cargo run --release -p datview -- examples/signals.csv
-cargo run --release -p datview -- examples/field_lzma.vti
-```
+It is a ground-up Rust re-imagining of [pyDatView](https://github.com/ebranlard/pyDatView) and keeps all of its analysis power.
 
-On Windows, the standard MSVC toolchain requires Visual Studio C++ Build Tools and the Windows SDK. A GNU toolchain with a complete MinGW installation is also supported. Linux desktop builds need development packages for the display backend (for Debian/Ubuntu: `libxkbcommon-dev`, `libwayland-dev`, `libxcb-shape0-dev`, `libxcb-xfixes0-dev`). macOS builds use the normal Rust and Xcode Command Line Tools setup.
+## Download
 
-The executable is `target/release/datview.exe` on Windows (`target/release/datview` elsewhere). Double-click it, drag files onto its window, or run it with filenames:
+Windows 10/11 (x64): download `rustDatView-…-windows-x86_64.zip` from [Releases](https://github.com/exror/rustDatView/releases), extract it and run `rustDatView.exe`. No installer, runtime, Python or Rust needed. The archive contains example files to try and this documentation; the documentation is also a separate download, `rustDatView-…-docs.zip`.
 
-```powershell
-.\target\release\datview.exe .\examples\motherboard-power.csv
-```
+The executable is not code-signed, so SmartScreen may ask for confirmation the first time. Compare the downloads with `SHA256SUMS.txt` from the release if you want to verify them.
 
-The repository does not bundle compilers, private build configuration, input files from a user's machine, or credentials.
+## Documentation
 
-## Workflow
+- [Quick start](docs/QUICK_START.md): a ten-minute tour of what rustDatView does for you, using the example files.
+- [User guide](docs/USER_GUIDE.md): every feature, option, setting and shortcut.
 
-- Open files using **File → Open**, the command line, or drag-and-drop. Ctrl-drop appends instead of replacing. Choose **Auto format** or a particular reader.
-- Select tables and X/Y channels. Numeric/datetime Time, Elapsed Time and Timestamp channels are preferred for X, with Index as the fallback. **Auto**, **Common columns**, and **Independent tables** support matching channels across reordered tables.
-- Select **Regular**, **PDF**, **FFT**, **MinMax**, **Compare**, or **Polar**. Configure transform options, logarithmic axes, lines/points/steps, subplots, synchronized X axes, limits and styling.
-- Table operations include rename, reload, sort, reorder, transpose, merge on X with interpolation, vertical concatenation and CSV/Parquet/OpenFAST binary export.
-- Formula columns use names without units in braces: `{Signal} * 2`, `sin({Time} * 2 * pi)`. Masks support numeric/date/string comparisons and `&`, `&&`, `|`, `||`, `and`, `or`, `not`. Examples: `({Time} > 1) & ({Time} < 8)`, `{Name} == 'rotor'`, `['rotor' in str(x) for x in {Name}]`. Row comprehensions accept the bound variable, literals, comparisons, string membership, `str()` and boolean operators; they do not execute arbitrary Python.
-- The pipeline provides masking, filtering, resampling, binning, outlier rejection, unit conversion, OpenFAST channel renaming, nodal averaging and nodal concatenation. Actions can be removed and reapplied on reload; configurations can be saved as JSON.
-- Statistics include original/transformed signal summaries and integrals. Two-click measurements expose interval statistics. Tools provide model fitting, logarithmic-decrement damping estimates and rainflow equivalent loads.
-- **2D fields** exposes available scalar fields, coordinate axes, colormaps, automatic/common/manual color ranges, polar projection and CSV matrix export.
-- Export figures as SVG, PNG, PDF or EPS. Export Python plotting scripts with transform/pipeline configuration. Generated scripts require Python and the selected scientific library flavor; exporting a script does not execute it.
-- Preferences and pipeline options persist through egui's application storage. Loaded filenames and table data are not persisted.
+## The everyday loop
 
-## Interactive telemetry figures
+1. **Open** — drag files onto the window, use <kbd>Ctrl</kbd>+<kbd>O</kbd>, or pass them on the command line. Hold <kbd>Ctrl</kbd> while dropping to add to what is already open. Large files load in the background.
+2. **See** — rustDatView picks the time axis and a sensible first set of channels (package power, effective clock, package temperature for CPU logs) and stacks them in panes by unit: Power · W, Clock · MHz, Temperature · °C, Flags · Yes/No.
+3. **Find channels** — type in the channel search (<kbd>Ctrl</kbd>+<kbd>F</kbd>): `core clock`, `vrm | soc`, `gpu temp`. Click to plot, <kbd>Shift</kbd>-click for a range, <kbd>Alt</kbd>-click to plot only that channel. Each channel shows its unit and a sparkline.
+4. **Read values** — hover anywhere: every pane shows the value of every series at that instant, and a time pill marks the position.
+5. **Select a range** — drag across the chart. The statistics dock instantly shows min, mean, max, standard deviation, P99 and **energy** (W integrated over seconds, shown in J, kJ or Wh) for that range. Double-click inside it to zoom in.
+6. **Share** — <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> copies the chart as an image; <kbd>Ctrl</kbd>+<kbd>E</kbd> exports PNG, SVG, PDF or EPS with a live preview. Statistics copy straight into Excel.
 
-`examples/motherboard-power.csv` is a **synthetic** motherboard trace: shared CPU core/GFX, SOC and memory power, clock and temperature, with a workload interval and one deliberately injected power spike.
+## Navigating the chart
 
-1. Open your CSV or another supported tabular log. Check the X dropdown: a recognized time column is selected even when it is not the first column. Choose **Index** explicitly for sample-number plots. Units remain those in your file; milliseconds are not silently converted to seconds.
-2. Use the series search to find channels. Matching is case-insensitive and fuzzy: `cpupwr` matches separated letters; `soc power` requires both tokens; `core | gfx | memory` finds alternatives. Hidden selections stay selected. **Select matches** adds channels, **Deselect matches** removes only matches, and **Clear all** resets the Y selection. **Power rails**, **Clocks** and **Temperatures** provide starting queries.
-3. Open **Plot studio → Annotate**. Enter a label, choose its highlight color, then select **Point** and click near a sample, or select **Region** and click its start and end. Point markers snap to visible samples. Edit labels, colors and region bounds in the inspector. **Esc** cancels a pending annotation. Pan/zoom and double-click-to-fit remain available.
-4. Under **Filter**, target all selected series or one particular series. Supply any combination of X/Y minimum and maximum, then **Keep inside** or **Exclude inside**. Boundaries are inclusive; multiple enabled rules are combined. Exclusions leave gaps rather than drawing misleading connecting lines. For example, keep core/GFX power below 150 W without changing SOC or memory. Rules can be disabled or removed.
-5. Under **Share**, set title, axis labels, resolution, grid, legend and subplots. **Fonts & appearance** offers searchable installed font families, live interface preview, light/dark themes, and separate interface/export font sizes. Fonts are loaded from your system, not bundled into this repository. Restart after installing a new font.
-6. **Save annotated image** produces a clean figure without UI controls. **Copy image to clipboard** pastes the same figure into chat or an image editor. PNG is convenient for messages; SVG/PDF retain vector geometry and resolve font glyphs so recipients need not install your chosen font. EPS embeds a raster image to preserve typography and highlights.
+| Action | How |
+| --- | --- |
+| Zoom time | Mouse wheel (or pinch) |
+| Zoom one pane's Y | <kbd>Ctrl</kbd>+wheel, or wheel over its Y axis |
+| Pan | Right- or middle-drag, <kbd>Shift</kbd>+wheel, <kbd>←</kbd>/<kbd>→</kbd> |
+| Box zoom | <kbd>Ctrl</kbd>+drag, or the Zoom tool |
+| Select a range | Drag (Select tool); drag its edges to adjust; <kbd>Esc</kbd> clears |
+| Fit everything | Double-click, <kbd>Home</kbd> |
+| Back / forward through views | <kbd>Alt</kbd>+<kbd>←</kbd> / <kbd>Alt</kbd>+<kbd>→</kbd> |
+| Hide or solo a series | Click / <kbd>Alt</kbd>-click its legend entry |
+| Pane options | Hover a pane: log scale, fit Y, include zero, lock Y, maximize, remove |
 
-Display filters are non-destructive and use the current plot mode's X/Y values before logarithmic/flipped display axes. Source tables, statistics and analysis tools are unchanged; use a pipeline mask when the filtered values should also affect analysis. Annotations and display rules are scoped to the plot mode and **session-only**: export your figure before closing or replacing the loaded files. Python script export reproduces the analysis pipeline, not these manual presentation edits. Appearance and figure settings persist.
+The overview strip under the chart shows the whole recording; drag its window to move through time.
 
+## Comparing runs
+
+Open two logs of the same benchmark — for example `examples/cpu-benchmark-eco.csv` and `examples/cpu-benchmark-performance.csv` — and the same channels from both are overlaid and labelled by what differs in their names (`eco`, `performance`). Separate recordings are aligned at their start automatically; the notification offers Undo, and each source can be shifted in time. Turn on **Compare to** in the statistics dock to see Δ and Δ% against the reference run for every statistic. The **Compare** mode plots relative or absolute differences, ratios or one run against the other.
+
+<p align="center">
+  <img src="docs/images/compare-dark.png" alt="Two benchmark runs aligned at their start, with statistics compared against the eco run" width="900">
+</p>
+
+Logs that interleave several devices row by row — nvidia-smi with two GPUs, Intel PTAT or turbostat with one row per core — are split into one source per device as they open, so each GPU or core gets its own clean line (again with Undo). The **⋯** menu above the sources can also merge sources on a common X axis, stack their rows, transpose a table or split by any column; sessions rebuild these generated sources from their parents.
+
+## Beyond plotting
+
+- **Modes** — Signals, Distribution (PDF/KDE), Spectrum (FFT/PSD with Welch averaging, windows and detrending), Normalized (min/max scaling), Compare and Polar, each with plain-language options.
+- **New channels** (<kbd>Ctrl</kbd>+<kbd>N</kbd>) — formulas such as `{CPU Package Power} + {GPU Power}`, with templates for sum, difference, ratio, efficiency, rate of change, running energy (`cumtrapz`) and moving average, and a live preview. Formulas survive reloads.
+- **Processing** — masks (`{Time} > 30 and {CPU Package Power} < 150`), moving-average/low-pass/high-pass filters, resampling, binning, outlier removal, unit standardization and OpenFAST nodal tools, as an ordered list of steps you can save and reuse.
+- **Analyze** — curve fitting (polynomial, exponential, sinusoid, Gaussian, second-order responses, custom formulas), damping from a decaying oscillation, rainflow fatigue equivalent loads, and a full statistics report — all on the selected range.
+- **Inspector** (<kbd>Ctrl</kbd>+<kbd>I</kbd>) — colour, width, dash, drawing style and pane for each series; **marks** (points, highlighted regions, event markers and reference lines such as TjMax, PL1 or PL2) edited in the axis' own time format and included in exported figures; and **filters** that hide samples outside chosen ranges without changing the data.
+- **Table and file info** — a fast data grid synced to the chart cursor, and what the reader detected (encoding, delimiter, units, skipped header rows).
+- **2D fields** (<kbd>Ctrl</kbd>+<kbd>4</kbd>) — color maps of 2D fields from VTK, TurbSim and other field files, Cartesian or polar. Files that only contain fields open there directly.
+- **Sessions** — <kbd>Ctrl</kbd>+<kbd>S</kbd> saves files, channels, panes, styles, marks, processing and the view to a `.dvsession`; open it later, even after the logs have been regenerated.
+- **Export** — figures (PNG, SVG, PDF, EPS), data (CSV, Parquet, OpenFAST binary), statistics (TSV, CSV, Markdown) and a Python script that reproduces the chart.
+- **Follow** — watch files that are still being written and keep the newest data in view.
+- **Command palette** (<kbd>Ctrl</kbd>+<kbd>K</kbd>) — every command, channel and source by name. <kbd>F1</kbd> lists all shortcuts.
+- **Themes** — dark and light, following Windows by default, with an adjustable interface scale and font (Settings, <kbd>Ctrl</kbd>+<kbd>,</kbd>).
+
+## Files it understands
+
+Delimited text is detected from its content, not its extension:
+
+- UTF-8 (with or without BOM), UTF-16 and Windows-1252 encodings; comma, semicolon, tab, pipe and whitespace delimiters; decimal commas.
+- Metadata preambles (oscilloscopes, power analyzers, PTAT), separate units rows, LibreHardwareMonitor's two-row header, repeated header rows from concatenated logs, trailing delimiters and padded fields.
+- Units in brackets or parentheses, values with unit suffixes (`45.20 W`, `1500 MHz`), `N/A`, `[N/A]` and `-` as missing values, `Yes`/`No` flags, hexadecimal values.
+- Separate Date and Time columns are merged into one timestamp; day/month order is inferred from the data (Settings has a day-first override).
+- Duplicate channel names are kept apart (`GPU Fan [RPM]`, `GPU Fan #2 [RPM]`).
+
+Dedicated readers cover MSI Afterburner `.hml`, Excel, Parquet, NetCDF, MATLAB, TDMS, VTK, pickle tables (decoded without executing Python), and the OpenFAST, TurbSim, HAWC2, HAWCStab2, FLEX, Bladed, BModes, ROSCO, Tecplot, GNUplot, CACTUS and Mann-box formats from pyDatView. **File → Open with format…** forces a specific reader.
 
 ## Command line
 
-```sh
-# Multiple files
-cargo run -p datview -- first.csv second.outb
+```text
+rustDatView.exe [OPTIONS] [FILE ...]
 
-# Export without opening a desktop window
-cargo run -p datview -- examples/signals.csv --mode FFT --export spectrum.png
-cargo run -p datview -- examples/signals.csv --mode PDF --export probability.svg
-cargo run -p datview -- examples/signals.csv --y 2,3 --mode Compare --export comparison.pdf
-cargo run -p datview -- examples/signals.csv --export reproduce.py
-
-# Full reader list and options
-cargo run -p datview -- --help
+  -f, --format NAME     Reader format (default: detect)
+  --dayfirst            Read ambiguous dates as day/month/year
+  --mode MODE           Signals, Distribution, Spectrum, Normalized, Compare or Polar
+  --x INDEX             X column (zero-based, including Index)
+  --y INDEX[,INDEX]     Y columns
+  --pipeline PATH       Apply a saved processing pipeline (JSON)
+  --plot-options JSON   Mode options, as written in a session or by the Python export
+  --session PATH        Open a .dvsession
+  --follow              Watch the files for new data
+  --export PATH         Write a figure (.png .svg .pdf .eps) or Python script (.py) and exit
 ```
 
-X/Y indices are zero-based and include the inserted `Index` column. `--pipeline PATH` loads pipeline JSON; `--plot-options JSON` accepts the serialized `dv-plot::PlotType` configuration. Use `--` before filenames beginning with a dash.
+For example, `rustDatView.exe run.csv --mode Spectrum --export spectrum.png` renders a spectrum without opening a window.
 
-## File formats
+## Building from source
 
-The registry includes CSV/delimited text, Excel, Parquet, NetCDF, MATLAB, safe tabular pickle decoding, TDMS, VTK, OpenFAST input/output/linearization/summary/wind files, TurbSim, ROSCO, HAWC2, HAWCStab2, FLEX, Bladed, BModes, GNUplot, Tecplot, CACTUS, Mann boxes and RAAW MAT files. Individual readers return their table names, units and available scalar fields rather than coercing everything into one matrix. Explicit format errors are surfaced in the application.
+Install stable Rust from [rustup.rs](https://rustup.rs/) and the Visual Studio C++ build tools, then:
 
-### Compatibility boundaries
+```sh
+cargo build --release -p datview --locked
+cargo test --workspace --locked
+```
 
-This is a Rust application, not a Python interpreter. Arbitrary Python objects inside pickle files and dynamically loaded user Python plugins are not executed. Supported pickle tables are decoded by an inert parser. Python/matplotlib demo functions and standalone wind-farm simulation-generation helpers outside the desktop workflow are not included. External AMRWind conversion helpers require a reader absent from the referenced upstream checkout.
-
-The core table representation supports numeric, text and datetime columns; it does not represent arbitrary Arrow nested objects or pandas extension objects. Linearization matrix row labels are available through the file object's `matrix_row_labels` API instead of a pandas index. Subformat restrictions are reported as errors, never substituted with fake data.
-
-NetCDF supports classic/CDF-2 and NetCDF-4 root variables up to two dimensions, with Gregorian CF time decoding; CDF-5 and non-Gregorian calendars are rejected. MATLAB supports level-5 and v7.3 numeric/logical/text/cell/structure values; sparse matrices, object classes and recursive references are rejected. TDMS supports contiguous/interleaved numeric channels, strings and timestamps in both byte orders; DAQmx scaler streams and extended/complex samples are rejected. VTK XML enables zlib, LZ4 and LZMA compression.
-
-## Workspace
+The executable is `target/release/datview.exe`; release archives ship it as `rustDatView.exe`.
 
 | Crate | Responsibility |
 | --- | --- |
-| `dv-core` | Ordered columns, tables, table operations, formulas, file-object contract |
-| `dv-tools` | Spectral/signal analysis, statistics, fitting, damping, fatigue, palettes |
-| `dv-io` | File registry, readers/writers, OpenFAST nodal/field postprocessing |
-| `dv-plot` | Plot transforms, comparisons, plugin actions, pipelines, script export |
-| `datview` | Desktop UI, selection, figure rendering and command-line export |
+| `dv-core` | Tables, columns, units, formulas and masks |
+| `dv-io` | File detection, readers and writers |
+| `dv-tools` | Statistics, spectra, filters, fitting, damping, fatigue, colormaps |
+| `dv-plot` | Plot transforms, comparisons, processing pipelines, Python export |
+| `dv-chart` | Interactive chart engine with min/max decimation and matching SVG output |
+| `datview` | The desktop application |
 
-```sh
-cargo test --workspace --locked
-cargo build -p datview --locked
-```
+## License
 
-CI is configured to build and test the workspace on Linux, Windows and macOS. Local smoke checks exercise the executable and independently generated scientific file formats; unit tests alone do not establish desktop rendering correctness. The checked-in MATLAB7.3 fixture is synthetic HDF5 data created with h5py: numeric samples, UTF-16 text and cell/structure object references behind a 512-byte MATLAB userblock.
-
-## License and provenance
-
-MIT; upstream copyright is retained in `LICENSE`. pyDatView reference revision: `07187cbaf8c76090f2b2eb89278bdde99ac4ef4d`. Matplotlib/ColorBrewer palette notices and complete terms are included in `THIRD_PARTY_NOTICES.md` and `licenses/`.
+MIT. rustDatView builds on pyDatView by E. Branlard (MIT); bundled fonts, icons and palette data are credited in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The example telemetry files are synthetic.

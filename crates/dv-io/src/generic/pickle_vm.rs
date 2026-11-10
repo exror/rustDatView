@@ -101,7 +101,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
     fn pairs(v: Vec<Node>) -> Result<Vec<(Node, Node)>, IoError> {
-        if v.len() % 2 != 0 {
+        if !v.len().is_multiple_of(2) {
             return Err(super::broken("pickle dictionary missing value"));
         }
         Ok(v.chunks(2).map(|v| (v[0].clone(), v[1].clone())).collect())

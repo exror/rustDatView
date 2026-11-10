@@ -49,9 +49,8 @@ struct Array {
     fortran: bool,
 }
 fn bytes(n: &Node) -> Result<Vec<u8>, IoError> {
-    match &*n.borrow() {
-        Value::Bytes(b) => return Ok(b.clone()),
-        _ => {}
+    if let Value::Bytes(b) = &*n.borrow() {
+        return Ok(b.clone());
     }
     if let Some((module, name, args, _)) = object(n) {
         if module == "_codecs" && name == "encode" {
@@ -119,7 +118,7 @@ fn decode_buffer(raw: Vec<u8>, code: &str, little: bool) -> Result<ColumnData, I
     } else {
         width
     };
-    if size == 0 || raw.len() % size != 0 {
+    if size == 0 || !raw.len().is_multiple_of(size) {
         return Err(super::broken("NumPy data buffer size does not match dtype"));
     }
     if kind == "S" || kind == "U" {

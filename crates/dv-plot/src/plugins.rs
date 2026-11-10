@@ -16,7 +16,198 @@ pub enum Plugin {
     RadialConcat,
     Concat { common_only: bool },
 }
+
+/// A built-in pipeline step and a valid, editable initial configuration.
+///
+/// IDs are the serialized [`Plugin`] variant names. Some steps still require
+/// suitable input data, such as OpenFAST channels for nodal processing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginInfo {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub description: &'static str,
+    pub default: Plugin,
+}
+
 impl Plugin {
+    /// The built-in processing steps, in menu order.
+    pub fn catalog() -> Vec<PluginInfo> {
+        vec![
+            PluginInfo {
+                id: "Mask",
+                label: "Mask rows",
+                description: "Keep rows matching an expression.",
+                default: Self::Mask {
+                    expression: "True".into(),
+                },
+            },
+            PluginInfo {
+                id: "Filter",
+                label: "Filter",
+                description: "Smooth or frequency-filter signals.",
+                default: Self::filter(),
+            },
+            PluginInfo {
+                id: "Sampler",
+                label: "Resample",
+                description: "Change the signal's sample coordinates.",
+                default: Self::sampler(),
+            },
+            PluginInfo {
+                id: "Binning",
+                label: "Bin values",
+                description: "Average samples in equally spaced x bins.",
+                default: Self::Binning {
+                    bins: 50,
+                    min: 0.0,
+                    max: 1.0,
+                },
+            },
+            PluginInfo {
+                id: "Outliers",
+                label: "Remove outliers",
+                description: "Replace values far from the median with gaps.",
+                default: Self::outliers(),
+            },
+            PluginInfo {
+                id: "Units",
+                label: "Standardize units",
+                description: "Convert recognized units to a standard convention.",
+                default: Self::Units {
+                    flavor: "SI".into(),
+                },
+            },
+            PluginInfo {
+                id: "RenameChannels",
+                label: "Rename channels",
+                description: "Convert channel names between OpenFAST conventions.",
+                default: Self::RenameChannels {
+                    flavor: "OF2To3".into(),
+                },
+            },
+            PluginInfo {
+                id: "RadialAverage",
+                label: "Nodal average",
+                description: "Average OpenFAST channels across a time window or revolutions.",
+                default: Self::radial_average(),
+            },
+            PluginInfo {
+                id: "RadialConcat",
+                label: "Nodal concatenation",
+                description: "Combine OpenFAST spanwise channels into a new table.",
+                default: Self::RadialConcat,
+            },
+            PluginInfo {
+                id: "Concat",
+                label: "Concatenate tables",
+                description: "Combine rows from the active tables.",
+                default: Self::Concat { common_only: false },
+            },
+        ]
+    }
+
+    /// A concise, human-readable description of this configured step.
+    pub fn summary(&self) -> String {
+        match self {
+            Self::Mask { expression } => {
+                let expression = expression.trim();
+                if expression.is_empty() || expression.eq_ignore_ascii_case("no mask") {
+                    "Mask · no mask".into()
+                } else {
+                    format!("Mask · {expression}")
+                }
+            }
+            Self::Filter { name, param } => match name.as_str() {
+                "Moving average" => format!(
+                    "Moving average · {param} {}",
+                    if *param == 1.0 { "sample" } else { "samples" }
+                ),
+                "Low pass 1st order" => format!("Low-pass 1st order · {param} Hz"),
+                "High pass 1st order" => format!("High-pass 1st order · {param} Hz"),
+                _ => format!("Filter · {name} · {param}"),
+            },
+            Self::Sampler { name, param } => match (name.as_str(), param.as_slice()) {
+                ("Replace", values) => {
+                    format!("Replace coordinates · {}", coordinates_summary(values))
+                }
+                ("Insert", values) => {
+                    format!("Insert coordinates · {}", coordinates_summary(values))
+                }
+                ("Remove", values) => {
+                    format!("Remove coordinates · {}", coordinates_summary(values))
+                }
+                ("Every n", [stride, ..]) => format!("Every n · stride {stride}"),
+                ("Linspace", [start, end, count]) => format!(
+                    "Evenly spaced · {start}–{end} · {count} {}",
+                    if *count == 1.0 { "point" } else { "points" }
+                ),
+                ("Time-based", [interval, ..]) => format!("Time-based · {interval} x units"),
+                ("Delta x", [step]) => format!("Delta x · {step}"),
+                ("Delta x", [step, min, max]) => {
+                    let min = if min.is_nan() {
+                        "auto".into()
+                    } else {
+                        min.to_string()
+                    };
+                    let max = if max.is_nan() {
+                        "auto".into()
+                    } else {
+                        max.to_string()
+                    };
+                    format!("Delta x · {step} · {min}–{max}")
+                }
+                _ => format!("Resample · {name} · {}", coordinates_summary(param)),
+            },
+            Self::Binning { bins, min, max } => format!(
+                "Binning · {bins} {} · {min}–{max}",
+                if *bins == 1 { "bin" } else { "bins" }
+            ),
+            Self::Outliers { median_deviation } if *median_deviation == 0.0 => {
+                "Remove outliers · disabled".into()
+            }
+            Self::Outliers { median_deviation } => {
+                format!("Remove outliers · {median_deviation} × median deviation")
+            }
+            Self::Units { flavor } => format!("Standardize units · {flavor}"),
+            Self::RenameChannels { flavor } => {
+                let label = match flavor.as_str() {
+                    "OF2To3" => "OpenFAST 2 → 3",
+                    "OF3To2" => "OpenFAST 3 → 2",
+                    "FldToAero" => "Fld → Aero",
+                    "AeroToFld" => "Aero → Fld",
+                    other => other,
+                };
+                format!("Rename channels · {label}")
+            }
+            Self::RadialAverage { method, param } => match method.as_str() {
+                "constantwindow" => format!("Nodal average · last {param} s"),
+                "periods" | "periods_omega" => format!(
+                    "Nodal average · last {param} {}{}",
+                    if *param == 1.0 {
+                        "revolution"
+                    } else {
+                        "revolutions"
+                    },
+                    if method == "periods_omega" {
+                        " (speed)"
+                    } else {
+                        ""
+                    }
+                ),
+                _ => format!("Nodal average · {method} · {param}"),
+            },
+            Self::RadialConcat => "Nodal concatenation".into(),
+            Self::Concat { common_only } => format!(
+                "Concatenate tables · {}",
+                if *common_only {
+                    "common columns"
+                } else {
+                    "all columns"
+                }
+            ),
+        }
+    }
+
     pub fn filter() -> Self {
         Self::Filter {
             name: "Moving average".into(),
@@ -229,6 +420,16 @@ impl Plugin {
         }
     }
 }
+
+fn coordinates_summary(values: &[f64]) -> String {
+    match values {
+        [] => "no coordinates".into(),
+        [a] => format!("{a}"),
+        [a, b] => format!("{a}, {b}"),
+        [a, b, c] => format!("{a}, {b}, {c}"),
+        [a, b, c, ..] => format!("{a}, {b}, {c} … ({} total)", values.len()),
+    }
+}
 fn numeric_column(col: &Column) -> Result<&[f64]> {
     match &col.data {
         ColumnData::Float(v) | ColumnData::DateTime(v) => Ok(v),
@@ -386,5 +587,149 @@ mod tests {
         );
         assert_eq!(sampler("Every n", &[2.9]).unwrap(), Sampler::EveryN(2));
         assert!(sampler("Delta x", &[1., 0.]).is_err());
+    }
+
+    #[test]
+    fn catalog_defaults_serialize_and_run_on_suitable_inputs() {
+        let frame = DataFrame::from_floats(
+            ["Time_[s]", "AB1N001Cl_[-]", "AB1N002Cl_[-]"],
+            vec![
+                vec![0., 0.25, 0.5, 0.75, 1.],
+                vec![1., 2., 3., 4., 5.],
+                vec![2., 3., 4., 5., 6.],
+            ],
+        )
+        .unwrap();
+        let table = Table::from_df(frame, "run");
+        let x = [0., 0.25, 0.5, 0.75, 1.];
+        let y = [1., 2., 3., 4., 5.];
+        let mut ids = std::collections::HashSet::new();
+        for info in Plugin::catalog() {
+            assert!(ids.insert(info.id));
+            let value = serde_json::to_value(&info.default).unwrap();
+            let id = match &value {
+                serde_json::Value::String(name) => name.as_str(),
+                serde_json::Value::Object(fields) => fields.keys().next().unwrap().as_str(),
+                _ => panic!("unexpected plugin representation"),
+            };
+            assert_eq!(id, info.id);
+            assert_eq!(
+                serde_json::from_value::<Plugin>(value).unwrap(),
+                info.default
+            );
+
+            match &info.default {
+                Plugin::Mask { .. } | Plugin::Units { .. } | Plugin::RenameChannels { .. } => {
+                    info.default.apply_table(&mut table.clone()).unwrap();
+                }
+                Plugin::RadialAverage { .. } | Plugin::RadialConcat => {
+                    assert!(!info.default.add_tables(&table, 1).unwrap().is_empty());
+                }
+                Plugin::Concat { .. } => {
+                    let mut tables = vec![table.clone(), table.clone()];
+                    let mut action = crate::pipeline::Action::new("concat", info.default.clone());
+                    action.apply(&mut tables, false);
+                    assert!(action.errors.is_empty(), "{:?}", action.errors);
+                    assert_eq!(tables.len(), 3);
+                }
+                _ => {
+                    info.default.apply_xy(&x, &y).unwrap();
+                }
+            }
+        }
+        assert_eq!(ids.len(), 10);
+    }
+
+    #[test]
+    fn sampler_and_filter_menu_defaults_are_actionable() {
+        let x = [0., 0.25, 0.5, 0.75, 1.];
+        let y = [1., 2., 3., 4., 5.];
+        for definition in dv_tools::signal_analysis::FILTERS {
+            let plugin = Plugin::Filter {
+                name: definition.name.into(),
+                param: definition.parameter_info().default,
+            };
+            assert!(plugin.apply_xy(&x, &y).is_ok(), "{}", definition.name);
+        }
+        for definition in dv_tools::signal_analysis::SAMPLERS {
+            let plugin = Plugin::Sampler {
+                name: definition.name.into(),
+                param: definition.default_parameters().to_vec(),
+            };
+            assert!(plugin.apply_xy(&x, &y).is_ok(), "{}", definition.name);
+            let encoded = serde_json::to_string(&plugin).unwrap();
+            assert_eq!(serde_json::from_str::<Plugin>(&encoded).unwrap(), plugin);
+        }
+    }
+
+    #[test]
+    fn summaries_describe_parameters_and_legacy_bounds() {
+        assert_eq!(
+            Plugin::Filter {
+                name: "Low pass 1st order".into(),
+                param: 2.0,
+            }
+            .summary(),
+            "Low-pass 1st order · 2 Hz"
+        );
+        assert_eq!(
+            Plugin::Sampler {
+                name: "Delta x".into(),
+                param: vec![0.5, f64::NAN, 10.0],
+            }
+            .summary(),
+            "Delta x · 0.5 · auto–10"
+        );
+        assert_eq!(
+            Plugin::Sampler {
+                name: "Insert".into(),
+                param: vec![1., 2., 3., 4., 5.],
+            }
+            .summary(),
+            "Insert coordinates · 1, 2, 3 … (5 total)"
+        );
+        assert_eq!(
+            Plugin::RenameChannels {
+                flavor: "OF2To3".into()
+            }
+            .summary(),
+            "Rename channels · OpenFAST 2 → 3"
+        );
+        assert_eq!(
+            Plugin::Concat { common_only: true }.summary(),
+            "Concatenate tables · common columns"
+        );
+        assert_eq!(
+            Plugin::Mask {
+                expression: " {Speed}>10 ".into()
+            }
+            .summary(),
+            "Mask · {Speed}>10"
+        );
+        assert_eq!(
+            Plugin::Binning {
+                bins: 1,
+                min: -1.,
+                max: 3.
+            }
+            .summary(),
+            "Binning · 1 bin · -1–3"
+        );
+        assert_eq!(
+            Plugin::Outliers {
+                median_deviation: 0.
+            }
+            .summary(),
+            "Remove outliers · disabled"
+        );
+        assert_eq!(
+            Plugin::RadialAverage {
+                method: "periods".into(),
+                param: 1.
+            }
+            .summary(),
+            "Nodal average · last 1 revolution"
+        );
+        assert_eq!(Plugin::RadialConcat.summary(), "Nodal concatenation");
     }
 }

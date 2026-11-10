@@ -79,7 +79,7 @@ impl<'a> Decoder<'a> {
             9 | 12 | 13 => 8,
             _ => return Err(broken(format!("Unsupported MATLAB numeric type {kind}"))),
         };
-        if b.len() % width != 0 {
+        if !b.len().is_multiple_of(width) {
             return Err(broken("Truncated MATLAB numeric value"));
         }
         Ok(b.chunks_exact(width)

@@ -2,7 +2,67 @@ use super::common::*;
 use dv_core::{FileObject, IoError, NamedFrame};
 use std::{path::Path, sync::Arc};
 
+fn has_initial_count(path: &Path) -> Result<bool, IoError> {
+    Ok(crate::registry::text_prefix(path)?
+        .as_deref()
+        .and_then(|text| text.lines().next())
+        .and_then(|line| line.split_whitespace().next())
+        .is_some_and(|word| word.parse::<usize>().is_ok()))
+}
+
+/// AE/PC files start with nested counts followed by four-column numeric data.
+pub(crate) fn polar_header_kind(text: &str) -> Option<bool> {
+    let mut lines = text.lines();
+    let first = lines.next()?;
+    let mut first_words = first.split_whitespace();
+    if first_words.next()?.parse::<usize>().ok()? == 0
+        || first_words
+            .next()
+            .is_some_and(|word| word.parse::<f64>().is_ok())
+    {
+        return None;
+    }
+    let numeric = |word: &str| {
+        word.parse::<f64>().is_ok()
+            || ((word.contains('d') || word.contains('D')) && number(word).is_ok())
+    };
+    let numeric_row = |line: &str| {
+        let mut words = line.split_whitespace();
+        (0..4).all(|_| words.next().is_some_and(numeric)) && !words.next().is_some_and(numeric)
+    };
+    let mut fields = lines.next()?.split_whitespace();
+    let first = fields.next()?;
+    let second = fields.next();
+    if second.is_some_and(|word| word.parse::<usize>().is_ok()) {
+        let row_count = second?;
+        if first.parse::<usize>().is_ok()
+            && row_count.parse::<usize>().is_ok_and(|n| n > 0)
+            && !fields.next().is_some_and(numeric)
+            && numeric_row(lines.next()?)
+        {
+            return Some(false);
+        }
+    } else if !second.is_some_and(numeric) && first.parse::<usize>().is_ok_and(|n| n > 0) {
+        let mut header = lines.next()?.split_whitespace();
+        let index = header.next()?;
+        let row_count = header.next()?;
+        let thickness = header.next()?;
+        if !header.next().is_some_and(numeric)
+            && index.parse::<usize>().is_ok()
+            && row_count.parse::<usize>().is_ok_and(|n| n > 0)
+            && numeric(thickness)
+            && numeric_row(lines.next()?)
+        {
+            return Some(true);
+        }
+    }
+    None
+}
+
 pub fn ae(path: &Path) -> Result<Arc<dyn FileObject>, IoError> {
+    if !has_initial_count(path)? {
+        return Err(wrong("Not an AE file"));
+    }
     ae_read(path).map_err(|e| match e {
         IoError::BrokenFormat(s) => wrong(s),
         e => e,
@@ -39,6 +99,9 @@ fn ae_read(path: &Path) -> Result<Arc<dyn FileObject>, IoError> {
     Ok(object(path, "HAWC2 AE file", frames))
 }
 pub fn pc(path: &Path) -> Result<Arc<dyn FileObject>, IoError> {
+    if !has_initial_count(path)? {
+        return Err(wrong("Not a PC file"));
+    }
     pc_read(path).map_err(|e| match e {
         IoError::BrokenFormat(s) => wrong(s),
         e => e,
@@ -232,6 +295,7 @@ pub fn dat(path: &Path) -> Result<Arc<dyn FileObject>, IoError> {
         12
     };
     let mut cols = Vec::new();
+    let channel_separator = bh.then(|| regex::Regex::new(r"\t+| {2,}").unwrap());
     for line in ls.iter().skip(ci).filter(|s| !s.trim().is_empty()).take(nc) {
         if bh {
             let sp: Vec<_> = line.split_whitespace().collect();
@@ -241,7 +305,8 @@ pub fn dat(path: &Path) -> Result<Arc<dyn FileObject>, IoError> {
             let unit = sp.last().unwrap();
             let end = line.rfind(unit).unwrap();
             let rest = line[line.find(sp[0]).unwrap() + sp[0].len()..end].trim();
-            let halves: Vec<_> = regex::Regex::new(r"\t+| {2,}")
+            let halves: Vec<_> = channel_separator
+                .as_ref()
                 .unwrap()
                 .split(rest)
                 .filter(|s| !s.trim().is_empty())
@@ -281,8 +346,10 @@ pub fn dat(path: &Path) -> Result<Arc<dyn FileObject>, IoError> {
             )?;
             values.push(
                 b[c * nr * 2..(c + 1) * nr * 2]
-                    .chunks_exact(2)
-                    .map(|v| i16::from_le_bytes(v.try_into().unwrap()) as f64 * scale)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|v| i16::from_le_bytes(*v) as f64 * scale)
                     .collect(),
             );
         }
@@ -301,6 +368,33 @@ pub fn dat(path: &Path) -> Result<Arc<dyn FileObject>, IoError> {
         vec![NamedFrame::unnamed(df)],
     ))
 }
+/// HAWCStab2 headers number each bracketed column after the first.
+/// Counting units alone also matches ordinary telemetry headers.
+pub(crate) fn stab_header_kind(text: &str) -> Option<bool> {
+    let header = text.lines().next()?.trim_start().strip_prefix('#')?;
+    let mut parts = header.split(']');
+    if !parts.next()?.contains('[') {
+        return None;
+    }
+    let mut columns = 1usize;
+    for part in parts {
+        if !part.contains('[') {
+            break;
+        }
+        let part = part.trim_start();
+        let digits = part.bytes().take_while(u8::is_ascii_digit).count();
+        if digits == 0 || part[..digits].parse::<usize>().ok()? != columns {
+            return None;
+        }
+        columns += 1;
+    }
+    match columns {
+        15 => Some(false),
+        14 | 18 | 38 => Some(true),
+        _ => None,
+    }
+}
+
 pub fn pwr(path: &Path) -> Result<Arc<dyn FileObject>, IoError> {
     stab(path, false)
 }
@@ -308,10 +402,20 @@ pub fn ind(path: &Path) -> Result<Arc<dyn FileObject>, IoError> {
     stab(path, true)
 }
 fn stab(path: &Path, ind: bool) -> Result<Arc<dyn FileObject>, IoError> {
+    if crate::registry::text_prefix(path)?
+        .as_deref()
+        .and_then(stab_header_kind)
+        != Some(ind)
+    {
+        return Err(wrong("Not the requested HAWCStab2 table"));
+    }
     let s = text(path)?;
     stab_text(path, &s, ind)
 }
 fn stab_text(path: &Path, s: &str, ind: bool) -> Result<Arc<dyn FileObject>, IoError> {
+    if stab_header_kind(s) != Some(ind) {
+        return Err(wrong("Not the requested HAWCStab2 table"));
+    }
     let mut ls = s.lines();
     let h = ls.next().unwrap_or("").trim_start();
     if !h.starts_with('#') {
@@ -327,8 +431,7 @@ fn stab_text(path: &Path, s: &str, ind: bool) -> Result<Arc<dyn FileObject>, IoE
         let c = if ind {
             part.trim().get(2..).unwrap_or("").trim().to_string()
         } else {
-            part.trim()
-                .split_whitespace()
+            part.split_whitespace()
                 .skip(1)
                 .collect::<Vec<_>>()
                 .join(" ")
@@ -480,14 +583,12 @@ pub fn htc(path: &Path) -> Result<Arc<dyn FileObject>, IoError> {
                     }
                 }
             }
-            "set" => {
-                if sections.last().is_some_and(|s| s == "timoschenko_input") {
-                    if let Some(b) = body.as_mut() {
-                        if sp.len() < 3 {
-                            return Err(broken("HTC set requires two indices"));
-                        }
-                        b.set = format!("{}_{}", sp[1], sp[2]);
+            "set" if sections.last().is_some_and(|s| s == "timoschenko_input") => {
+                if let Some(b) = body.as_mut() {
+                    if sp.len() < 3 {
+                        return Err(broken("HTC set requires two indices"));
                     }
+                    b.set = format!("{}_{}", sp[1], sp[2]);
                 }
             }
             _ => {}

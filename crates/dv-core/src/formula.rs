@@ -19,6 +19,7 @@ use chrono::NaiveDate;
 use crate::common::no_unit;
 use crate::dataframe::{datetime_to_seconds, ColumnData, DataFrame};
 use crate::error::{DvError, Result};
+use crate::units::split_name_unit;
 
 mod string_mask;
 
@@ -34,6 +35,24 @@ enum Tok {
     LBracket,
     RBracket,
     Comma,
+}
+
+/// Tokens as the user typed them, for error messages.
+impl std::fmt::Display for Tok {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Tok::Num(value) => write!(f, "`{value}`"),
+            Tok::Str(text) => write!(f, "`'{text}'`"),
+            Tok::Col(name) => write!(f, "`{{{name}}}`"),
+            Tok::Ident(name) => write!(f, "`{name}`"),
+            Tok::Op(op) => write!(f, "`{op}`"),
+            Tok::LParen => f.write_str("`(`"),
+            Tok::RParen => f.write_str("`)`"),
+            Tok::LBracket => f.write_str("`[`"),
+            Tok::RBracket => f.write_str("`]`"),
+            Tok::Comma => f.write_str("`,`"),
+        }
+    }
 }
 
 fn tokenize(s: &str) -> Result<Vec<Tok>> {
@@ -515,6 +534,78 @@ fn call_function(name: &str, mut args: Vec<Val>) -> Result<Val> {
             let y = arr_of(args.pop().unwrap())?;
             Ok(Val::Arr(gradient(&y, xs.as_deref())?, false))
         }
+        "cumtrapz" | "cumulative_trapezoid" => {
+            // Running trapezoid integral starting at 0; `{P [W]}` over
+            // `{Time}` (seconds) gives energy in J. Gaps contribute nothing.
+            if nargs != 1 && nargs != 2 {
+                return Err(DvError::Formula(
+                    "`cumtrapz` expects 1 or 2 arguments".into(),
+                ));
+            }
+            let xs = if nargs == 2 {
+                Some(arr_of(args.pop().unwrap())?)
+            } else {
+                None
+            };
+            let y = arr_of(args.pop().unwrap())?;
+            if xs.as_ref().is_some_and(|x| x.len() != y.len()) {
+                return Err(DvError::Formula("cumtrapz: length mismatch".into()));
+            }
+            let mut total = 0.0;
+            let mut out = Vec::with_capacity(y.len());
+            for i in 0..y.len() {
+                if i > 0 {
+                    let dx = xs.as_ref().map_or(1.0, |x| x[i] - x[i - 1]);
+                    let step = 0.5 * (y[i] + y[i - 1]) * dx;
+                    if step.is_finite() {
+                        total += step;
+                    }
+                }
+                out.push(total);
+            }
+            Ok(Val::Arr(out, false))
+        }
+        "movmean" | "moving_average" => {
+            // Centered moving mean over `n` samples, ignoring missing values.
+            need(2)?;
+            let window = arr_of(args.pop().unwrap())?;
+            let y = arr_of(args.pop().unwrap())?;
+            let n = match window.as_slice() {
+                [w] if w.is_finite() && *w >= 1.0 => *w as usize,
+                _ => {
+                    return Err(DvError::Formula(
+                        "movmean: window must be a number ≥ 1".into(),
+                    ))
+                }
+            };
+            let (mut sum, mut count) = (0.0, 0usize);
+            let mut out = Vec::with_capacity(y.len());
+            let (before, after) = ((n - 1) / 2, n / 2);
+            let mut lo = 0;
+            let mut hi = 0; // exclusive
+            for i in 0..y.len() {
+                while hi < y.len() && hi <= i + after {
+                    if y[hi].is_finite() {
+                        sum += y[hi];
+                        count += 1;
+                    }
+                    hi += 1;
+                }
+                while lo + before < i {
+                    if y[lo].is_finite() {
+                        sum -= y[lo];
+                        count -= 1;
+                    }
+                    lo += 1;
+                }
+                out.push(if count > 0 {
+                    sum / count as f64
+                } else {
+                    f64::NAN
+                });
+            }
+            Ok(Val::Arr(out, false))
+        }
         "where" => {
             need(3)?;
             let b = arr_of(args.pop().unwrap())?;
@@ -688,11 +779,7 @@ impl<'a> Ctx<'a> {
     }
     fn column(&self, name: &str) -> Result<Val> {
         let cols = self.df.columns();
-        let idx = cols
-            .iter()
-            .position(|c| no_unit(&c.name).trim() == name)
-            .or_else(|| cols.iter().position(|c| c.name.trim() == name))
-            .ok_or_else(|| DvError::Formula(format!("unknown column `{{{name}}}`")))?;
+        let idx = find_column(self.df, name)?;
         let c = &cols[idx];
         Ok(match &c.data {
             ColumnData::DateTime(v) => Val::Arr(v.clone(), true),
@@ -745,9 +832,37 @@ impl<'a> Ctx<'a> {
                     _ => Err(DvError::Formula(format!("unknown name `{id}`"))),
                 }
             }
-            Some(t) => Err(DvError::Formula(format!("unexpected token {t:?}"))),
+            Some(t) => Err(DvError::Formula(format!("unexpected {t}"))),
             None => Err(DvError::Formula("unexpected end of expression".into())),
         }
+    }
+}
+
+/// A `{Name}` reference: the name without its bracketed unit, the full name,
+/// or the label shown in the channel list (`Power` for `Power_W` or `Power W`).
+/// A label shared by two columns (`VDD` for `VDD_V` and `VDD_mA`) is an error
+/// rather than a guess.
+fn find_column(df: &DataFrame, name: &str) -> Result<usize> {
+    let cols = df.columns();
+    if let Some(index) = cols
+        .iter()
+        .position(|c| no_unit(&c.name).trim() == name)
+        .or_else(|| cols.iter().position(|c| c.name.trim() == name))
+    {
+        return Ok(index);
+    }
+    let mut labelled = cols
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| split_name_unit(&c.name).0 == name);
+    match (labelled.next(), labelled.next()) {
+        (Some((index, _)), None) => Ok(index),
+        (Some((_, a)), Some((_, b))) => Err(DvError::Formula(format!(
+            "`{{{name}}}` could be `{{{}}}` or `{{{}}}`; use the full name",
+            a.name.trim(),
+            b.name.trim()
+        ))),
+        _ => Err(DvError::Formula(format!("unknown column `{{{name}}}`"))),
     }
 }
 
@@ -763,7 +878,7 @@ fn eval_val(df: &DataFrame, expr: &str) -> Result<Val> {
     let v = ctx.or()?;
     if ctx.pos < ctx.toks.len() {
         return Err(DvError::Formula(format!(
-            "unexpected trailing token {:?}",
+            "unexpected {} after a complete expression",
             ctx.toks[ctx.pos]
         )));
     }
@@ -806,6 +921,61 @@ mod tests {
             Column::datetime("Date", vec![0.0, 86400.0, 2.0 * 86400.0, 3.0 * 86400.0]),
         ])
         .unwrap()
+    }
+
+    #[test]
+    fn energy_integral_and_centered_moving_mean() {
+        let df = DataFrame::from_columns(vec![
+            Column::float("Time [s]", vec![0.0, 1.0, 3.0, 4.0]),
+            Column::float("Power [W]", vec![10.0, 20.0, f64::NAN, 40.0]),
+        ])
+        .unwrap();
+        // The NaN interval contributes nothing; the last step is (NaN+40)/2 → skipped too.
+        assert_eq!(
+            eval_formula(&df, "cumtrapz({Power}, {Time})").unwrap(),
+            [0.0, 15.0, 15.0, 15.0]
+        );
+        assert_eq!(
+            eval_formula(&df, "cumtrapz({Time})").unwrap(),
+            [0.0, 0.5, 2.5, 6.0]
+        );
+        // Window 3 is centered; the missing sample is ignored, not treated as zero.
+        assert_eq!(
+            eval_formula(&df, "movmean({Power}, 3)").unwrap(),
+            [15.0, 15.0, 30.0, 40.0]
+        );
+        assert!(eval_formula(&df, "movmean({Power}, 0)").is_err());
+    }
+
+    #[test]
+    fn channels_are_referenced_by_the_label_shown_for_them() {
+        let df = DataFrame::from_columns(vec![
+            Column::float("Time_s", vec![0.0, 1.0]),
+            Column::float("Power_W", vec![10.0, 20.0]),
+            Column::float("GPU Power W", vec![1.0, 2.0]),
+        ])
+        .unwrap();
+        assert_eq!(
+            eval_formula(&df, "{Power} + {GPU Power}").unwrap(),
+            [11.0, 22.0]
+        );
+        assert_eq!(
+            eval_formula(&df, "{Power_W} * {Time}").unwrap(),
+            [0.0, 20.0]
+        );
+        assert_eq!(eval_mask(&df, "{Power} > 15").unwrap(), [false, true]);
+        // A label two columns share is not resolved by guessing.
+        let df = DataFrame::from_columns(vec![
+            Column::float("VDD_V", vec![1.2]),
+            Column::float("VDD_mA", vec![400.0]),
+        ])
+        .unwrap();
+        let error = eval_formula(&df, "{VDD} * 2").unwrap_err().to_string();
+        assert!(
+            error.contains("VDD_V") && error.contains("VDD_mA"),
+            "{error}"
+        );
+        assert_eq!(eval_formula(&df, "{VDD_mA} / 1000").unwrap(), [0.4]);
     }
 
     #[test]

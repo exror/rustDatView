@@ -1,7 +1,6 @@
 //! Compile Python-shaped row predicates once; never execute Python code.
 use super::{b2f, truthy, Tok};
 use crate::{
-    common::no_unit,
     dataframe::{ColumnData, DataFrame},
     error::{DvError, Result},
 };
@@ -204,12 +203,7 @@ pub(super) fn evaluate(df: &DataFrame, tokens: &[Tok]) -> Result<Vec<f64>> {
     if parser.pos != parser.tokens.len() {
         return Err(error("unexpected trailing row-predicate token"));
     }
-    let column = df
-        .columns()
-        .iter()
-        .find(|c| no_unit(&c.name).trim() == name)
-        .or_else(|| df.columns().iter().find(|c| c.name.trim() == name))
-        .ok_or_else(|| DvError::Formula(format!("unknown column `{{{name}}}`")))?;
+    let column = &df.columns()[super::find_column(df, &name)?];
     (0..df.nrows())
         .map(|row| predicate.evaluate(&column.data, row).map(b2f))
         .collect()

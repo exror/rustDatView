@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Embedded by link.exe (see build.rs), which replaces the toolchain's default
+     manifest, so long path support is restated here. Windows 11 24H2 and
+     later do not give rustDatView a console window when it is started from
+     Explorer; run from a shell, it still shares the shell's console, so the
+     shell waits for it and receives its output and exit code. -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <application>
+    <windowsSettings>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+      <consoleAllocationPolicy xmlns="http://schemas.microsoft.com/SMI/2024/WindowsSettings">detached</consoleAllocationPolicy>
+    </windowsSettings>
+  </application>
+</assembly>

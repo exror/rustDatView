@@ -21,6 +21,7 @@ pub use summary::{
     SummaryGraphNode, SummaryModes,
 };
 pub use turbsim::{TurbSimFile, TurbSimOptions};
+pub(crate) use turbsim_ts::looks_like_turbsim_ts;
 pub use turbsim_ts::TurbSimTsFile;
 
 use crate::registry::{FileFormat, Writer};

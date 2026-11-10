@@ -6,11 +6,10 @@ use std::sync::Arc;
 
 static NEXT_TABLE_ID: AtomicU64 = AtomicU64::new(1);
 
-use chrono::{NaiveDate, NaiveDateTime};
 use regex::Regex;
 
 use crate::common::{clean_col, ellude_common, multi_interp, no_unit, Extrap};
-use crate::dataframe::{datetime_to_seconds, Column, ColumnData, DataFrame};
+use crate::dataframe::{Column, ColumnData, DataFrame};
 use crate::error::{DvError, Result};
 use crate::file::{FileObject, IoError};
 use crate::formula::{eval_formula, eval_mask};
@@ -24,52 +23,9 @@ pub struct Formula {
     pub name: String,
 }
 
-/// Parse a date/time string. `dayfirst` resolves `01/02/2020` ambiguity.
-pub fn parse_datetime_str(s: &str, dayfirst: bool) -> Option<f64> {
-    let s = s.trim();
-    if s.is_empty() {
-        return None;
-    }
-    if let Ok(d) = chrono::DateTime::parse_from_rfc3339(s) {
-        return Some(datetime_to_seconds(&d.naive_utc()));
-    }
-    let (dmy, mdy) = (
-        ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y"],
-        ["%m/%d/%Y", "%m-%d-%Y", "%m.%d.%Y"],
-    );
-    let (first, second) = if dayfirst { (dmy, mdy) } else { (mdy, dmy) };
-    let mut date_fmts: Vec<&str> = vec!["%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%Y%m%d"];
-    date_fmts.extend(first);
-    date_fmts.extend(second);
-    date_fmts.extend([
-        "%d %b %Y",
-        "%d %B %Y",
-        "%b %d %Y",
-        "%B %d %Y",
-        "%b %d, %Y",
-        "%B %d, %Y",
-    ]);
-    let time_fmts = ["%H:%M:%S%.f", "%H:%M:%S", "%H:%M"];
-    for df in &date_fmts {
-        for sep in [" ", "T", "_"] {
-            for tf in &time_fmts {
-                let f = format!("{df}{sep}{tf}");
-                if let Ok(d) = NaiveDateTime::parse_from_str(s, &f) {
-                    return Some(datetime_to_seconds(&d));
-                }
-            }
-        }
-        if let Ok(d) = NaiveDate::parse_from_str(s, df) {
-            // %Y%m%d would accept plain integers such as "20200101"; only
-            // accept 8-digit strings for it.
-            if *df == "%Y%m%d" && s.len() != 8 {
-                continue;
-            }
-            return Some(datetime_to_seconds(&d.and_hms_opt(0, 0, 0)?));
-        }
-    }
-    None
-}
+mod datetime;
+
+pub use datetime::{infer_datetime_format, parse_datetime_str, DateTimeFormat};
 
 /// A table of data, typically coming from a file.
 #[derive(Debug, Clone)]
@@ -180,9 +136,8 @@ impl Table {
             let ColumnData::Str(v) = &mut c.data else {
                 continue;
             };
-            let first = v.iter().find(|s| !s.trim().is_empty() && s.trim() != "NaT");
-            let is_date = first.is_some_and(|s| parse_datetime_str(s, dayfirst).is_some());
-            if is_date {
+            if let Some((format, _)) = infer_datetime_format(v.iter().map(String::as_str), dayfirst)
+            {
                 let parsed: Option<Vec<f64>> = v
                     .iter()
                     .map(|s| {
@@ -190,7 +145,7 @@ impl Table {
                         if t.is_empty() || t == "NaT" {
                             Some(f64::NAN)
                         } else {
-                            parse_datetime_str(t, dayfirst)
+                            format.parse(t)
                         }
                     })
                     .collect();
