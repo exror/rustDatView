@@ -779,8 +779,7 @@ impl<'a> Ctx<'a> {
     }
     fn column(&self, name: &str) -> Result<Val> {
         let cols = self.df.columns();
-        let idx = find_column(self.df, name)
-            .ok_or_else(|| DvError::Formula(format!("unknown column `{{{name}}}`")))?;
+        let idx = find_column(self.df, name)?;
         let c = &cols[idx];
         Ok(match &c.data {
             ColumnData::DateTime(v) => Val::Arr(v.clone(), true),
@@ -841,12 +840,30 @@ impl<'a> Ctx<'a> {
 
 /// A `{Name}` reference: the name without its bracketed unit, the full name,
 /// or the label shown in the channel list (`Power` for `Power_W` or `Power W`).
-fn find_column(df: &DataFrame, name: &str) -> Option<usize> {
+/// A label shared by two columns (`VDD` for `VDD_V` and `VDD_mA`) is an error
+/// rather than a guess.
+fn find_column(df: &DataFrame, name: &str) -> Result<usize> {
     let cols = df.columns();
-    cols.iter()
+    if let Some(index) = cols
+        .iter()
         .position(|c| no_unit(&c.name).trim() == name)
         .or_else(|| cols.iter().position(|c| c.name.trim() == name))
-        .or_else(|| cols.iter().position(|c| split_name_unit(&c.name).0 == name))
+    {
+        return Ok(index);
+    }
+    let mut labelled = cols
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| split_name_unit(&c.name).0 == name);
+    match (labelled.next(), labelled.next()) {
+        (Some((index, _)), None) => Ok(index),
+        (Some((_, a)), Some((_, b))) => Err(DvError::Formula(format!(
+            "`{{{name}}}` could be `{{{}}}` or `{{{}}}`; use the full name",
+            a.name.trim(),
+            b.name.trim()
+        ))),
+        _ => Err(DvError::Formula(format!("unknown column `{{{name}}}`"))),
+    }
 }
 
 fn eval_val(df: &DataFrame, expr: &str) -> Result<Val> {
@@ -947,6 +964,18 @@ mod tests {
             [0.0, 20.0]
         );
         assert_eq!(eval_mask(&df, "{Power} > 15").unwrap(), [false, true]);
+        // A label two columns share is not resolved by guessing.
+        let df = DataFrame::from_columns(vec![
+            Column::float("VDD_V", vec![1.2]),
+            Column::float("VDD_mA", vec![400.0]),
+        ])
+        .unwrap();
+        let error = eval_formula(&df, "{VDD} * 2").unwrap_err().to_string();
+        assert!(
+            error.contains("VDD_V") && error.contains("VDD_mA"),
+            "{error}"
+        );
+        assert_eq!(eval_formula(&df, "{VDD_mA} / 1000").unwrap(), [0.4]);
     }
 
     #[test]

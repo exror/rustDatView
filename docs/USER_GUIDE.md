@@ -1,6 +1,6 @@
 # rustDatView user guide
 
-This is the reference for everything rustDatView 1.0 can do. For a short tour of the features you are least likely to find elsewhere, start with the [quick start](QUICK_START.md).
+This is the reference for everything rustDatView 1.1 can do. For a short tour of the features you are least likely to find elsewhere, start with the [quick start](QUICK_START.md).
 
 - [Starting](#starting)
 - [Window layout](#window-layout)
@@ -101,7 +101,7 @@ Text logs are read according to their content, not their extension:
 - **Encoding**: UTF-8 with or without BOM, UTF-16 with a BOM, otherwise Windows-1252.
 - **Delimiter**: comma, semicolon, tab, pipe or whitespace, detected from the rows. With a semicolon delimiter, a decimal comma is accepted (`0,573`). `'` and spaces are accepted as thousands separators, and `0x…` values as hexadecimal.
 - **Header**: preamble lines before the table are skipped (oscilloscope and power-analyzer exports, PTAT wrappers). A row of units under the header is used as units, including units the app does not otherwise know (`s, bar, deg, L/min, W`). LibreHardwareMonitor's two header rows are combined. Repeated header rows from concatenated logs are skipped. HWiNFO's trailing *Sensor Group* row is skipped.
-- **Units** in brackets or parentheses in the header (`Power [W]`, `Time (s)`) are recognised, and so are logger-style suffixes after an underscore (`Power_W`, `Time_s`, `Clock_MHz`, `Load_pct`). Suffixes that usually belong to the name are left alone (`Phase_A`, `Temp_min`). Values with a unit suffix (`58.46 W`, `640 MHz`, `14 %`) are split into number and unit. A column that mixes different units is kept as text.
+- **Units** in brackets or parentheses in the header (`Power [W]`, `Time (s)`) are recognised, and so are logger-style suffixes after an underscore (`Power_W`, `VDD_V`, `Time_s`, `Clock_MHz`, `VDD_mA`, `Load_pct`). Suffixes that usually belong to the name are left alone: `Phase_A`, `Temp_min`, and the wind components `Wind_V` and `Wind_W`. `_I` names a quantity rather than a unit, so `VDD_I` gets no unit; write `VDD_A` or `VDD_mA` to give it one. Values with a unit suffix (`58.46 W`, `640 MHz`, `14 %`) are split into number and unit. A column that mixes different units is kept as text.
 - **Missing values**: empty fields, `-`, `NA`, `N/A`, `[N/A]`, `NaN`, `NaT`, `NULL`, `None` and `<NA>`.
 - **Flags**: `Yes`/`No`, `True`/`False` and `On`/`Off` become 1/0 with the unit `Yes/No`. They are drawn as steps in a *Flags* pane.
 - **Dates and times**: separate `Date` and `Time` columns are merged into one `Time` timestamp. Whether `03/04` is 3 April or 4 March is inferred from the data; when it cannot be, month first is used unless **Day first when ambiguous** is on in Settings (or `--dayfirst` is given). A column named for time (`timestamp`, `ts_ms`, `Time_Of_Day_Seconds`…) holding Unix time in seconds, milliseconds, microseconds or nanoseconds is read as dates (2000–2100); a unit such as `_ms` drops from the name. A Rigol-style `X` sequence column with *Start* and *Increment* produces a `Time [s]` column.
@@ -447,7 +447,7 @@ The new channel is plotted immediately. Formulas are recomputed when files are r
 
 | Element | Syntax |
 | --- | --- |
-| Channel | `{Name}` (without the unit) or `{Name [unit]}` |
+| Channel | `{Name}`: the name shown in the channel list, the column name without its unit, or the full column name such as `{Name [unit]}` or `{VDD_mA}`. When two channels show the same name (`VDD` for `VDD_V` and `VDD_mA`), use the full column name; the suggestions do this for you |
 | Numbers, text | `1.5`, `1e-3`, `'text'` or `"text"` |
 | Constants | `pi`, `e`, `nan`, `inf`, `True`, `False` |
 | Arithmetic | `+ - * /`, `//` (floor division), `%` (modulo), `**` (power). `^` is not an operator |
@@ -693,3 +693,4 @@ Open with format…, Open session…, Export Python script…, Follow file chang
 - Ctrl+click in the channel list acts like a plain click.
 - The status bar summarises only the first source.
 - Fit results are not saved in sessions; re-run the fit after opening one.
+- Two columns with the same name in different units (`VDD [V]` and `VDD [mA]`) appear as one channel; only the first is listed.

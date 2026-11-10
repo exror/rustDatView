@@ -1036,7 +1036,7 @@ checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
 name = "datview"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "ab_glyph",
  "dv-chart",
@@ -1132,7 +1132,7 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
 name = "dv-chart"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "ab_glyph",
  "chrono",
@@ -1144,7 +1144,7 @@ dependencies = [
 
 [[package]]
 name = "dv-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "chrono",
  "regex",
@@ -1154,7 +1154,7 @@ dependencies = [
 
 [[package]]
 name = "dv-io"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -1176,7 +1176,7 @@ dependencies = [
 
 [[package]]
 name = "dv-plot"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "dv-core",
  "dv-io",
@@ -1188,7 +1188,7 @@ dependencies = [
 
 [[package]]
 name = "dv-tools"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "dv-core",
  "nalgebra",

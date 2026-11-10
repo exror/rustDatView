@@ -87,14 +87,30 @@ def main():
             'rustc': run('rustc', '--version').strip(),
         }, indent=2) + '\n', encoding='utf-8')
         archive = assets / f'{name}.zip'
-        with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as output:
-            for file in sorted(root.rglob('*')):
-                if file.is_file():
-                    output.write(file, file.relative_to(root.parent))
-        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        write_zip(archive, root)
+        # The documentation on its own: the guides and their screenshots.
+        docs_name = f'rustDatView-v{version}-docs'
+        docs_root = Path(tmp) / docs_name
+        shutil.copytree(repo / 'docs', docs_root)
+        for guide in ('QUICK_START.md', 'USER_GUIDE.md'):
+            if not (docs_root / guide).is_file():
+                raise RuntimeError(f'Missing documentation: {guide}')
+        docs_archive = assets / f'{docs_name}.zip'
+        write_zip(docs_archive, docs_root)
         # LF endings, so `sha256sum -c SHA256SUMS.txt` works everywhere.
-        (assets / 'SHA256SUMS.txt').write_text(f'{digest}  {archive.name}\n', encoding='utf-8', newline='\n')
-        print(f'Packaged and smoke-tested {archive.name} ({archive.stat().st_size} bytes, sha256 {digest})')
+        sums = ''.join(
+            f'{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n'
+            for path in (archive, docs_archive)
+        )
+        (assets / 'SHA256SUMS.txt').write_text(sums, encoding='utf-8', newline='\n')
+        print(f'Packaged and smoke-tested {archive.name} and {docs_archive.name}:\n{sums}', end='')
+
+
+def write_zip(archive, root):
+    with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as output:
+        for file in sorted(root.rglob('*')):
+            if file.is_file():
+                output.write(file, file.relative_to(root.parent))
 
 
 if __name__ == '__main__':

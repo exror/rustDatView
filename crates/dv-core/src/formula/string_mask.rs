@@ -203,9 +203,7 @@ pub(super) fn evaluate(df: &DataFrame, tokens: &[Tok]) -> Result<Vec<f64>> {
     if parser.pos != parser.tokens.len() {
         return Err(error("unexpected trailing row-predicate token"));
     }
-    let column = super::find_column(df, &name)
-        .map(|index| &df.columns()[index])
-        .ok_or_else(|| DvError::Formula(format!("unknown column `{{{name}}}`")))?;
+    let column = &df.columns()[super::find_column(df, &name)?];
     (0..df.nrows())
         .map(|row| predicate.evaluate(&column.data, row).map(b2f))
         .collect()

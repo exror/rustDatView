@@ -5,6 +5,7 @@ use eframe::egui::{self, Color32, RichText};
 
 use super::{hint, modal, primary_button};
 use crate::{
+    channels::Channel,
     ui::{theme, widgets},
     workspace::Workspace,
 };
@@ -225,9 +226,9 @@ impl FormulaDialog {
         let mut chosen = None;
         ui.horizontal_wrapped(|ui| {
             for index in matches {
-                let label = &workspace.channels[index].label;
-                if widgets::chip(ui, label).clicked() {
-                    chosen = Some(label.clone());
+                let name = formula_name(&workspace.channels[index], &workspace.channels);
+                if widgets::chip(ui, &name).clicked() {
+                    chosen = Some(name);
                 }
             }
         });
@@ -236,7 +237,7 @@ impl FormulaDialog {
             chosen = workspace
                 .search(&query)
                 .first()
-                .map(|&index| workspace.channels[index].label.clone());
+                .map(|&index| formula_name(&workspace.channels[index], &workspace.channels));
         }
         if let Some(label) = chosen {
             self.expression.truncate(open);
@@ -562,9 +563,10 @@ impl Template {
             .collect();
         let x = workspace.x_key.as_deref().and_then(channel);
         let reference = |index: usize| {
-            selected
-                .get(index)
-                .map_or_else(|| "A".to_owned(), |channel| channel.label.clone())
+            selected.get(index).map_or_else(
+                || "A".to_owned(),
+                |channel| formula_name(channel, &workspace.channels),
+            )
         };
         let a = reference(0);
         let b = reference(1);
@@ -572,7 +574,10 @@ impl Template {
             .first()
             .map_or("", |channel| channel.unit.as_str())
             .to_owned();
-        let x_name = x.map_or_else(|| "Time".to_owned(), |channel| channel.label.clone());
+        let x_name = x.map_or_else(
+            || "Time".to_owned(),
+            |channel| formula_name(channel, &workspace.channels),
+        );
         let x_unit = x
             .map(|channel| {
                 if channel.family == "Time" && channel.unit.is_empty() {
@@ -587,7 +592,7 @@ impl Template {
                 let terms: Vec<_> = if selected.len() >= 2 {
                     selected
                         .iter()
-                        .map(|c| format!("{{{}}}", c.label))
+                        .map(|c| format!("{{{}}}", formula_name(c, &workspace.channels)))
                         .collect()
                 } else {
                     vec!["{A}".into(), "{B}".into()]
@@ -666,5 +671,16 @@ impl Template {
         }
         dialog.expression = expression;
         dialog.focus_expression = true;
+    }
+}
+
+/// How a formula refers to a channel: by the name shown in the channel list,
+/// unless another channel shows the same one (`VDD` for both `VDD_V` and
+/// `VDD_mA`); then by its full column name.
+fn formula_name(channel: &Channel, channels: &[Channel]) -> String {
+    if channels.iter().filter(|c| c.label == channel.label).count() > 1 {
+        channel.original.clone()
+    } else {
+        channel.label.clone()
     }
 }

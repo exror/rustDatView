@@ -460,7 +460,8 @@ pub fn split_name_unit(input: &str) -> (String, String) {
 // Logger exports abbreviate units after an underscore. A single letter there
 // is usually an identifier (Phase_A, Bank_B) and a spelled-out word usually
 // part of the name (Temp_min, Time_Of_Day_Seconds); accept those only where
-// the name says what they measure, or not at all.
+// the name says what they measure, or not at all. V and W are also the
+// velocity components of wind and flow measurements (Wind_U, Wind_V, Wind_W).
 fn underscore_unit(name: &str, unit: &str) -> bool {
     let info = parse_unit(unit);
     if matches!(info.family, UnitFamily::Other | UnitFamily::Dimensionless) {
@@ -468,7 +469,10 @@ fn underscore_unit(name: &str, unit: &str) -> bool {
     }
     let name = name.to_ascii_lowercase();
     match unit {
-        "W" | "V" | "J" | "s" => true,
+        "J" | "s" => true,
+        "V" | "W" => !["wind", "vel", "speed", "flow", "gust"]
+            .iter()
+            .any(|word| name.contains(word)),
         "C" | "F" | "K" => name.contains("temp"),
         "A" => name.contains("curr") || name.contains("amp"),
         _ if unit.chars().count() == 1 => false,
@@ -816,6 +820,14 @@ mod tests {
             ("B1N1_Fx", "B1N1_Fx", ""),
             ("Time_Of_Day_Seconds", "Time_Of_Day_Seconds", ""),
             ("CPU Package Power_W", "CPU Package Power", "W"),
+            ("VDD_V", "VDD", "V"),
+            ("CH1_V", "CH1", "V"),
+            ("GPU_W", "GPU", "W"),
+            ("VDD_mA", "VDD", "mA"),
+            ("VDD_I", "VDD_I", ""),
+            ("Wind_V", "Wind_V", ""),
+            ("Wind_W", "Wind_W", ""),
+            ("Vel_W", "Vel_W", ""),
         ] {
             assert_eq!(
                 split_name_unit(input),

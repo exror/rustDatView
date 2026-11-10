@@ -1,15 +1,26 @@
 # Changelog
 
-## Unreleased
+## 1.1.0
 
-- Documentation: a [user guide](docs/USER_GUIDE.md) covering every feature, setting and shortcut, and a [quick start](docs/QUICK_START.md) touring the features that save the most manual work.
-- The release archive includes the documentation and `nvidia-smi-two-gpus.csv`, an nvidia-smi log with two GPUs that is split into one source per card when opened.
+Documentation, and logs that open correctly when their units are written in less common ways.
+
+### Documentation
+
+- A [user guide](docs/USER_GUIDE.md) covering every feature, setting and shortcut, and a [quick start](docs/QUICK_START.md) touring the features that save the most manual work. Both ship in the release archive and as a separate documentation download.
+- The release archive also includes `nvidia-smi-two-gpus.csv`, an nvidia-smi log with two GPUs that is split into one source per card when opened.
+
+### Opening files
+
+- A units row with units the app does not know (`s, bar, deg, L/min, W`) no longer replaces the column names. Previously the real header was skipped as preamble and the units became the names.
+- Logger-style units after an underscore (`Power_W`, `VDD_V`, `Time_s`, `Clock_MHz`, `VDD_mA`, `Load_pct`) are recognised, so such logs get a time axis, panes by unit and energy. Names such as `Phase_A`, `Temp_min` and the wind components `Wind_V` and `Wind_W` are left alone.
+- Unix timestamps in seconds, milliseconds, microseconds or nanoseconds in a time-named column (`timestamp`, `ts_ms`) are read as dates instead of large numbers.
+
+### Fixes
+
 - Units are shown in one spelling everywhere. The sidebar, legend values, Table view headers and spectrum units used the file's spelling (`degC`, `RPM`) while pane titles and statistics showed `°C` and `rpm`.
 - Channel counts match the channel list. The sidebar counter included the hidden index column, and the source card and status bar counted text columns, which cannot be plotted.
+- Formulas accept the name shown in the channel list (`{Power}` for `Power_W`). A name that two channels share is reported instead of silently picking one, and the formula suggestions insert the full column name in that case.
 - `--export` arranges files as the window does: interleaved devices are split into one source per device and separate recordings are aligned at their start.
-- A units row with units the app does not know (`s, bar, deg, L/min, W`) no longer replaces the column names. Previously the real header was skipped as preamble and the units became the names.
-- Logger-style units after an underscore (`Power_W`, `Time_s`, `Clock_MHz`, `Load_pct`) are recognised, so such logs get a time axis, panes by unit and energy. Formulas can refer to these channels by the name shown in the sidebar (`{Power}`).
-- Unix timestamps in seconds, milliseconds, microseconds or nanoseconds in a time-named column (`timestamp`, `ts_ms`) are read as dates instead of large numbers.
 - No console window opens next to the app when it is started from Explorer on Windows 11 24H2 and later; on older Windows it closes as soon as the app starts. Scripts and terminals still wait for `--export` and receive its output and exit code.
 
 ## 1.0.0
