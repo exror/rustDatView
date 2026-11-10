@@ -10,7 +10,9 @@ use std::{
 };
 
 use dv_core::{
-    table::infer_datetime_format, Column, ColumnData, DataFrame, FileObject, IoError, NamedFrame,
+    table::infer_datetime_format,
+    units::{is_unit_symbol, parse_unit, split_name_unit, UnitFamily},
+    Column, ColumnData, DataFrame, FileObject, IoError, NamedFrame,
 };
 use tokenize::{owned_field, records, unquote, without_comment, Fields, Record};
 use value::{is_missing, parse, Value};
@@ -233,6 +235,90 @@ fn is_units_row(fields: &[&str], offset: usize, width: usize) -> bool {
         && selected
             .iter()
             .any(|s| unit_token(s).is_some_and(|u| !u.is_empty()))
+}
+
+/// A unit cell as written, for units rows that use units beyond the short
+/// list `unit_token` normalizes (`bar`, `deg`, `L/min`).
+fn written_unit(s: &str) -> Option<&str> {
+    let s = unquote(s)
+        .trim()
+        .trim_matches(|c| matches!(c, '[' | ']' | '(' | ')'));
+    is_unit_symbol(s).then_some(s)
+}
+
+/// A units row whose cells are all units, some of them unknown to
+/// `unit_token`. Only trusted below a full row of names, so that a title or
+/// metadata line is never promoted to the header.
+fn is_written_units_row(
+    fields: &[&str],
+    header: &[&str],
+    offset: usize,
+    width: usize,
+    decimal_comma: bool,
+) -> bool {
+    if width == 0 || fields.len() < offset + width || header.len() < offset + width {
+        return false;
+    }
+    let units = &fields[offset..offset + width];
+    let names = &header[offset..offset + width];
+    units.iter().any(|s| written_unit(s).is_some())
+        && units
+            .iter()
+            .all(|s| unit_token(s).is_some() || written_unit(s).is_some())
+        && names.iter().all(|s| {
+            let s = unquote(s);
+            !s.is_empty() && matches!(parse(s, decimal_comma), Value::Text) && !is_unit_symbol(s)
+        })
+}
+
+/// Unix time in a time-named numeric column (`timestamp`, `ts_ms`,
+/// `Time_Of_Day_Seconds`): every value falls in 2000–2100 as seconds,
+/// milliseconds, microseconds or nanoseconds, chosen by the column's time
+/// unit or else by magnitude. Returns the divisor to seconds and its name.
+fn unix_time_scale(name: &str, values: &[f64]) -> Option<(f64, &'static str)> {
+    const RANGE: std::ops::RangeInclusive<f64> = 946_684_800.0..=4_102_444_800.0;
+    let (label, unit) = split_name_unit(name);
+    let stem: String = label
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    let time_named = stem.contains("time")
+        || stem.contains("epoch")
+        || stem.contains("stamp")
+        || matches!(
+            stem.as_str(),
+            "t" | "ts" | "unix" | "utc" | "date" | "datetime"
+        );
+    if !time_named {
+        return None;
+    }
+    let first = *values.iter().find(|v| v.is_finite())?;
+    let scales = [
+        (1.0, "seconds"),
+        (1e3, "milliseconds"),
+        (1e6, "microseconds"),
+        (1e9, "nanoseconds"),
+    ];
+    let (divisor, label) = if unit.is_empty() {
+        *scales.iter().find(|(d, _)| RANGE.contains(&(first / d)))?
+    } else {
+        let info = parse_unit(&unit);
+        if info.family != UnitFamily::Time {
+            return None;
+        }
+        *scales
+            .iter()
+            .find(|(d, _)| (info.to_base * d - 1.0).abs() < 1e-9)?
+    };
+    let mut previous = f64::NEG_INFINITY;
+    for &value in values.iter().filter(|v| v.is_finite()) {
+        if value < previous || !RANGE.contains(&(value / divisor)) {
+            return None;
+        }
+        previous = value;
+    }
+    Some((divisor, label))
 }
 
 fn append_unit(name: &str, unit: &str) -> String {
@@ -701,7 +787,16 @@ pub fn read_with_options(
     } else if header_index.is_none() && data_start > 0 {
         let previous = data_start - 1;
         let meaningful = data_width.saturating_sub(offset);
-        if is_units_row(&sample[previous], offset, meaningful) && previous > 0 {
+        let units_row = previous > 0
+            && (is_units_row(&sample[previous], offset, meaningful)
+                || is_written_units_row(
+                    &sample[previous],
+                    &sample[previous - 1],
+                    offset,
+                    meaningful,
+                    decimal_comma,
+                ));
+        if units_row {
             units_index = Some(previous);
             header_index = Some(previous - 1);
         } else {
@@ -746,7 +841,10 @@ pub fn read_with_options(
     if let Some(u) = units_index {
         let row = &sample[u];
         for (i, name) in names.iter_mut().enumerate() {
-            if let Some(unit) = row.get(offset + i).and_then(|field| unit_token(field)) {
+            if let Some(unit) = row
+                .get(offset + i)
+                .and_then(|field| unit_token(field).or_else(|| written_unit(field)))
+            {
                 *name = append_unit(name, unit);
             }
         }
@@ -969,9 +1067,23 @@ pub fn read_with_options(
                 } else if let Some(unit) = &column.unit {
                     name = append_unit(&name, unit);
                 }
-                if name.eq_ignore_ascii_case("Time_Of_Day_Seconds") {
-                    notes.push("Interpreted Time_Of_Day_Seconds as Unix epoch seconds".to_owned());
-                    ColumnData::DateTime(column.values)
+                let unix_time = if column.boolean {
+                    None
+                } else {
+                    unix_time_scale(&name, &column.values)
+                };
+                if let Some((divisor, scale)) = unix_time {
+                    notes.push(format!("Read {name} as Unix time in {scale}"));
+                    // A date axis has no unit: `timestamp_ms` becomes `timestamp`.
+                    let (label, unit) = split_name_unit(&name);
+                    if !unit.is_empty() {
+                        name = label;
+                    }
+                    let mut values = column.values;
+                    if divisor != 1.0 {
+                        values.iter_mut().for_each(|value| *value /= divisor);
+                    }
+                    ColumnData::DateTime(values)
                 } else {
                     ColumnData::Float(column.values)
                 }

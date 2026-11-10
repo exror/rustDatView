@@ -31,9 +31,11 @@ pub(crate) fn is_index(name: &str) -> bool {
     no_unit(name).trim().eq_ignore_ascii_case("index")
 }
 
-/// Lowercase letters and digits only: "Time_Of_Day_Seconds" → "timeofdayseconds".
+/// Lowercase letters and digits only, without the unit:
+/// "Time_Of_Day_Seconds" → "timeofdayseconds", "Time_s" → "time".
 fn compact(name: &str) -> String {
-    no_unit(name)
+    split_name_unit(name)
+        .0
         .chars()
         .filter(char::is_ascii_alphanumeric)
         .map(|c| c.to_ascii_lowercase())

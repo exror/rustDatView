@@ -1,7 +1,21 @@
 fn main() {
     println!("cargo:rerun-if-changed=../../assets/brand/rustdatview.ico");
+    println!("cargo:rerun-if-changed=rustdatview.manifest");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
+    }
+    // Windows 11 24H2 and later skip the console window when the app is
+    // started from Explorer (see the manifest). link.exe merges it with the
+    // toolchain's default manifest. MinGW always links its own default
+    // manifest, so GNU builds rely on the fallback in `main.rs` instead.
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        let manifest =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("rustdatview.manifest");
+        println!("cargo:rustc-link-arg-bins=/MANIFEST:EMBED");
+        println!(
+            "cargo:rustc-link-arg-bins=/MANIFESTINPUT:{}",
+            manifest.display()
+        );
     }
     let version = env!("CARGO_PKG_VERSION");
     let mut parts = [0u64; 4];

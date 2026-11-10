@@ -407,9 +407,11 @@ fn looks_like_other_unit(input: &str) -> bool {
 /// parenthesized indices remain part of the name. Descriptions are retained unless
 /// they parse as units or look like a physical unit expression. Bare trailing
 /// units are recognized conservatively: ambiguous one-letter tokens such as
-/// `A`, `C`, `K`, `s`, and `x` are not removed. Missing units yield `""`.
-/// Both returned strings are trimmed, and the unit can be passed to
-/// [`parse_unit`] for normalization and conversion.
+/// `A`, `C`, `K`, `s`, and `x` are not removed. Logger-style suffixes after an
+/// underscore (`Power_W`, `Time_s`, `Clock_MHz`) are units only when they parse
+/// as one and cannot be read as part of the name (`Phase_A`, `Temp_min`).
+/// Missing units yield `""`. Both returned strings are trimmed, and the unit
+/// can be passed to [`parse_unit`] for normalization and conversion.
 pub fn split_name_unit(input: &str) -> (String, String) {
     let input = input.trim();
     for (open, close) in [('[', ']'), ('(', ')')] {
@@ -446,7 +448,50 @@ pub fn split_name_unit(input: &str) -> (String, String) {
             return (name.to_owned(), unit.to_owned());
         }
     }
+    if let Some((name, unit)) = input.rsplit_once('_') {
+        let name = name.trim();
+        if !name.is_empty() && !unit.contains(char::is_whitespace) && underscore_unit(name, unit) {
+            return (name.to_owned(), unit.to_owned());
+        }
+    }
     (input.to_owned(), String::new())
+}
+
+// Logger exports abbreviate units after an underscore. A single letter there
+// is usually an identifier (Phase_A, Bank_B) and a spelled-out word usually
+// part of the name (Temp_min, Time_Of_Day_Seconds); accept those only where
+// the name says what they measure, or not at all.
+fn underscore_unit(name: &str, unit: &str) -> bool {
+    let info = parse_unit(unit);
+    if matches!(info.family, UnitFamily::Other | UnitFamily::Dimensionless) {
+        return false;
+    }
+    let name = name.to_ascii_lowercase();
+    match unit {
+        "W" | "V" | "J" | "s" => true,
+        "C" | "F" | "K" => name.contains("temp"),
+        "A" => name.contains("curr") || name.contains("amp"),
+        _ if unit.chars().count() == 1 => false,
+        _ => {
+            let abbreviation = unit.chars().count() <= 4 || info.symbol.eq_ignore_ascii_case(unit);
+            abbreviation
+                && !["min", "day", "days"]
+                    .iter()
+                    .any(|word| unit.eq_ignore_ascii_case(word))
+        }
+    }
+}
+
+/// Whether a standalone token, such as a cell in a units row, reads as a unit:
+/// a recognized unit or physical notation like `bar`, `deg`, `kPa` or
+/// `L/min`. Ordinary words and column names do not.
+pub fn is_unit_symbol(token: &str) -> bool {
+    let token = token.trim();
+    !token.is_empty()
+        && (!matches!(
+            parse_unit(token).family,
+            UnitFamily::Other | UnitFamily::Dimensionless
+        ) || looks_like_other_unit(token))
 }
 
 /// Returns the result unit and factor for integrating power over seconds.
@@ -755,6 +800,22 @@ mod tests {
             ("CPU utilization (total)", "CPU utilization (total)", ""),
             ("Processor (CPU/GPU)", "Processor (CPU/GPU)", ""),
             ("Status", "Status", ""),
+            ("Power_W", "Power", "W"),
+            ("Time_s", "Time", "s"),
+            ("Clock_MHz", "Clock", "MHz"),
+            ("Fan_RPM", "Fan", "RPM"),
+            ("Load_pct", "Load", "pct"),
+            ("timestamp_ms", "timestamp", "ms"),
+            ("CPU_Temp_C", "CPU_Temp", "C"),
+            ("Core_Current_A", "Core_Current", "A"),
+            ("Phase_A", "Phase_A", ""),
+            ("Bank_C", "Bank_C", ""),
+            ("Temp_min", "Temp_min", ""),
+            ("Time_of_day", "Time_of_day", ""),
+            ("Volt_max", "Volt_max", ""),
+            ("B1N1_Fx", "B1N1_Fx", ""),
+            ("Time_Of_Day_Seconds", "Time_Of_Day_Seconds", ""),
+            ("CPU Package Power_W", "CPU Package Power", "W"),
         ] {
             assert_eq!(
                 split_name_unit(input),

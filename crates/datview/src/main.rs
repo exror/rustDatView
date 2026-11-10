@@ -184,6 +184,8 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
+    #[cfg(windows)]
+    release_own_console();
     eframe::run_native(
         "rustDatView",
         eframe::NativeOptions {
@@ -196,4 +198,27 @@ fn main() -> eframe::Result {
         },
         Box::new(move |cc| Ok(Box::new(app::DatView::new(cc, launch)))),
     )
+}
+
+/// rustDatView is a console program, so shells and scripts wait for
+/// `--export` and receive its output and exit code. Started from Explorer it
+/// needs no console: Windows 11 24H2 and later skip creating one (see
+/// `rustdatview.manifest`); older versions create one, which is closed here
+/// as soon as it is clear that nothing else shares it. A console shared with a
+/// shell is kept.
+#[cfg(windows)]
+fn release_own_console() {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetConsoleProcessList(list: *mut u32, count: u32) -> u32;
+        fn FreeConsole() -> i32;
+    }
+    let mut processes = [0u32; 2];
+    // SAFETY: the buffer holds the number of process ids passed as `count`.
+    let attached = unsafe { GetConsoleProcessList(processes.as_mut_ptr(), processes.len() as u32) };
+    if attached == 1 {
+        // SAFETY: detaching from a console no other process uses has no
+        // further preconditions; later console writes are silently dropped.
+        unsafe { FreeConsole() };
+    }
 }

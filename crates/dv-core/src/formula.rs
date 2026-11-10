@@ -19,6 +19,7 @@ use chrono::NaiveDate;
 use crate::common::no_unit;
 use crate::dataframe::{datetime_to_seconds, ColumnData, DataFrame};
 use crate::error::{DvError, Result};
+use crate::units::split_name_unit;
 
 mod string_mask;
 
@@ -778,10 +779,7 @@ impl<'a> Ctx<'a> {
     }
     fn column(&self, name: &str) -> Result<Val> {
         let cols = self.df.columns();
-        let idx = cols
-            .iter()
-            .position(|c| no_unit(&c.name).trim() == name)
-            .or_else(|| cols.iter().position(|c| c.name.trim() == name))
+        let idx = find_column(self.df, name)
             .ok_or_else(|| DvError::Formula(format!("unknown column `{{{name}}}`")))?;
         let c = &cols[idx];
         Ok(match &c.data {
@@ -839,6 +837,16 @@ impl<'a> Ctx<'a> {
             None => Err(DvError::Formula("unexpected end of expression".into())),
         }
     }
+}
+
+/// A `{Name}` reference: the name without its bracketed unit, the full name,
+/// or the label shown in the channel list (`Power` for `Power_W` or `Power W`).
+fn find_column(df: &DataFrame, name: &str) -> Option<usize> {
+    let cols = df.columns();
+    cols.iter()
+        .position(|c| no_unit(&c.name).trim() == name)
+        .or_else(|| cols.iter().position(|c| c.name.trim() == name))
+        .or_else(|| cols.iter().position(|c| split_name_unit(&c.name).0 == name))
 }
 
 fn eval_val(df: &DataFrame, expr: &str) -> Result<Val> {
@@ -920,6 +928,25 @@ mod tests {
             [15.0, 15.0, 30.0, 40.0]
         );
         assert!(eval_formula(&df, "movmean({Power}, 0)").is_err());
+    }
+
+    #[test]
+    fn channels_are_referenced_by_the_label_shown_for_them() {
+        let df = DataFrame::from_columns(vec![
+            Column::float("Time_s", vec![0.0, 1.0]),
+            Column::float("Power_W", vec![10.0, 20.0]),
+            Column::float("GPU Power W", vec![1.0, 2.0]),
+        ])
+        .unwrap();
+        assert_eq!(
+            eval_formula(&df, "{Power} + {GPU Power}").unwrap(),
+            [11.0, 22.0]
+        );
+        assert_eq!(
+            eval_formula(&df, "{Power_W} * {Time}").unwrap(),
+            [0.0, 20.0]
+        );
+        assert_eq!(eval_mask(&df, "{Power} > 15").unwrap(), [false, true]);
     }
 
     #[test]

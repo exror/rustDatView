@@ -588,3 +588,56 @@ fn mixed_column_reconstruction_skips_repeated_headers_and_sensor_groups() {
     assert_eq!(values[69], "69");
     assert_eq!(values[70], "not numeric");
 }
+
+#[test]
+fn units_rows_in_unlisted_units_keep_the_header_above_them() {
+    let fixture = TempFile::new(
+        "csv",
+        b"Rig 4 pump test\nTime,Pressure,Valve Angle,Flow,Pump Power\ns,bar,deg,L/min,W\n0.0,1.36,16.8,2.08,38.2\n0.5,1.37,16.9,2.09,38.4\n",
+    );
+    let file = open(&fixture);
+    let df = frame(file.as_ref());
+    for name in [
+        "Time [s]",
+        "Pressure [bar]",
+        "Valve Angle [deg]",
+        "Flow [L/min]",
+        "Pump Power [W]",
+    ] {
+        assert_eq!(floats(column(&df, name)).len(), 2, "{name}");
+    }
+    assert!(file.info().contains("Rig 4 pump test"), "{}", file.info());
+    // Below a title line, a row of unit-like names is the header itself.
+    let fixture = TempFile::new("csv", b"Bench export\nbar,deg\n1.36,16.8\n1.37,16.9\n");
+    let df = frame(open(&fixture).as_ref());
+    assert_eq!(floats(column(&df, "bar")), [1.36, 1.37]);
+}
+
+#[test]
+fn unix_time_in_time_named_columns_reads_as_dates() {
+    let fixture = TempFile::new(
+        "csv",
+        b"timestamp_ms,Power_W,count\n1679142896700,38.2,1679142896\n1679142897200,40.1,1679142897\n",
+    );
+    let file = open(&fixture);
+    let df = frame(file.as_ref());
+    assert!(df.get("timestamp").is_some(), "{:?}", df.names());
+    let time = datetimes(&df);
+    near(time[0], epoch(2023, 3, 18, 12, 34, 56, 700));
+    near(time[1], epoch(2023, 3, 18, 12, 34, 57, 200));
+    // The same magnitudes in a column not named for time stay numbers.
+    assert_eq!(
+        floats(column(&df, "count")),
+        [1_679_142_896.0, 1_679_142_897.0]
+    );
+    assert!(
+        file.info()
+            .contains("Read timestamp_ms as Unix time in milliseconds"),
+        "{}",
+        file.info()
+    );
+    // Elapsed seconds are not mistaken for Unix time.
+    let fixture = TempFile::new("csv", b"Time_s,Power_W\n0,38.2\n0.5,40.1\n");
+    let df = frame(open(&fixture).as_ref());
+    assert_eq!(floats(column(&df, "Time_s")), [0.0, 0.5]);
+}

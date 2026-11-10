@@ -7,6 +7,10 @@
 - Units are shown in one spelling everywhere. The sidebar, legend values, Table view headers and spectrum units used the file's spelling (`degC`, `RPM`) while pane titles and statistics showed `°C` and `rpm`.
 - Channel counts match the channel list. The sidebar counter included the hidden index column, and the source card and status bar counted text columns, which cannot be plotted.
 - `--export` arranges files as the window does: interleaved devices are split into one source per device and separate recordings are aligned at their start.
+- A units row with units the app does not know (`s, bar, deg, L/min, W`) no longer replaces the column names. Previously the real header was skipped as preamble and the units became the names.
+- Logger-style units after an underscore (`Power_W`, `Time_s`, `Clock_MHz`, `Load_pct`) are recognised, so such logs get a time axis, panes by unit and energy. Formulas can refer to these channels by the name shown in the sidebar (`{Power}`).
+- Unix timestamps in seconds, milliseconds, microseconds or nanoseconds in a time-named column (`timestamp`, `ts_ms`) are read as dates instead of large numbers.
+- No console window opens next to the app when it is started from Explorer on Windows 11 24H2 and later; on older Windows it closes as soon as the app starts. Scripts and terminals still wait for `--export` and receive its output and exit code.
 
 ## 1.0.0
 

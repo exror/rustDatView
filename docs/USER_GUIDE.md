@@ -26,7 +26,7 @@ This is the reference for everything rustDatView 1.0 can do. For a short tour of
 
 ## Starting
 
-Extract the release archive and run `rustDatView.exe`. Nothing needs to be installed. The archive also contains an `examples` folder.
+Extract the release archive and run `rustDatView.exe`. Nothing needs to be installed. The archive also contains an `examples` folder. On Windows 11 24H2 and later, no console window opens alongside the app. On older Windows, one appears briefly and closes.
 
 Without files, the window shows a welcome screen:
 
@@ -100,11 +100,11 @@ Text logs are read according to their content, not their extension:
 
 - **Encoding**: UTF-8 with or without BOM, UTF-16 with a BOM, otherwise Windows-1252.
 - **Delimiter**: comma, semicolon, tab, pipe or whitespace, detected from the rows. With a semicolon delimiter, a decimal comma is accepted (`0,573`). `'` and spaces are accepted as thousands separators, and `0x…` values as hexadecimal.
-- **Header**: preamble lines before the table are skipped (oscilloscope and power-analyzer exports, PTAT wrappers). A row of units under the header (`s`, `V`, `W`, `MHz`, `°C`, `%`, `RPM`…) is used as units. LibreHardwareMonitor's two header rows are combined. Repeated header rows from concatenated logs are skipped. HWiNFO's trailing *Sensor Group* row is skipped.
-- **Units** in brackets or parentheses in the header (`Power [W]`, `Time (s)`) are recognised. Values with a unit suffix (`58.46 W`, `640 MHz`, `14 %`) are split into number and unit. A column that mixes different units is kept as text.
+- **Header**: preamble lines before the table are skipped (oscilloscope and power-analyzer exports, PTAT wrappers). A row of units under the header is used as units, including units the app does not otherwise know (`s, bar, deg, L/min, W`). LibreHardwareMonitor's two header rows are combined. Repeated header rows from concatenated logs are skipped. HWiNFO's trailing *Sensor Group* row is skipped.
+- **Units** in brackets or parentheses in the header (`Power [W]`, `Time (s)`) are recognised, and so are logger-style suffixes after an underscore (`Power_W`, `Time_s`, `Clock_MHz`, `Load_pct`). Suffixes that usually belong to the name are left alone (`Phase_A`, `Temp_min`). Values with a unit suffix (`58.46 W`, `640 MHz`, `14 %`) are split into number and unit. A column that mixes different units is kept as text.
 - **Missing values**: empty fields, `-`, `NA`, `N/A`, `[N/A]`, `NaN`, `NaT`, `NULL`, `None` and `<NA>`.
 - **Flags**: `Yes`/`No`, `True`/`False` and `On`/`Off` become 1/0 with the unit `Yes/No`. They are drawn as steps in a *Flags* pane.
-- **Dates and times**: separate `Date` and `Time` columns are merged into one `Time` timestamp. Whether `03/04` is 3 April or 4 March is inferred from the data; when it cannot be, month first is used unless **Day first when ambiguous** is on in Settings (or `--dayfirst` is given). A `Time_Of_Day_Seconds` column (turbostat) is read as a Unix timestamp. A Rigol-style `X` sequence column with *Start* and *Increment* produces a `Time [s]` column.
+- **Dates and times**: separate `Date` and `Time` columns are merged into one `Time` timestamp. Whether `03/04` is 3 April or 4 March is inferred from the data; when it cannot be, month first is used unless **Day first when ambiguous** is on in Settings (or `--dayfirst` is given). A column named for time (`timestamp`, `ts_ms`, `Time_Of_Day_Seconds`…) holding Unix time in seconds, milliseconds, microseconds or nanoseconds is read as dates (2000–2100); a unit such as `_ms` drops from the name. A Rigol-style `X` sequence column with *Start* and *Increment* produces a `Time [s]` column.
 - **Ragged rows**: short rows are padded with missing values; extra fields go into new columns `C1`, `C2`…; an empty trailing column is dropped.
 - **Duplicate names** get ` #2`, ` #3`, … appended.
 - **Known producers**: units are filled in for LibreHardwareMonitor sensor IDs, Intel PTAT, turbostat, PresentMon, Joulescope statistics and nvidia-smi columns that do not carry them.
@@ -639,7 +639,7 @@ rustDatView.exe [OPTIONS] [FILE ...]
 - `--session` can be combined with files; the files are added after the session has loaded. `--mode`, `--plot-options`, `--pipeline` and `--follow` override the session.
 - Use `--` before file names that begin with a dash.
 
-Exit codes: 0 on success, 2 for invalid arguments, 1 when `--export` fails (`Export failed: …` on standard error).
+Exit codes: 0 on success, 2 for invalid arguments, 1 when `--export` fails (`Export failed: …` on standard error). Shells and scripts wait for the command to finish, so the exit code and output can be checked. Started from a terminal without `--export`, the terminal waits until the window is closed.
 
 Examples:
 
